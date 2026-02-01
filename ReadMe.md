@@ -30,13 +30,24 @@ A Python-based visualizer that plays video clips in response to MIDI input. Desi
     "midi_number": 60,
     "channel": 1,
     "start_sec": 0,
-    "end_sec": -1
+    "end_sec": -1,
+	"comments":"Some comment"
+	"source":"some_web_path.zip"
   },
   {
     "file_path": "clips/clip2.mp4",
     "midi_number": 62,
     "channel": 1,
     "start_sec": 15,
-    "end_sec": 45
+    "end_sec": 45,
+	"comments":"This clip is from a different video file",
+	"source":"some_web_path.zip"
   }
 ]
+
+## Getting videos
+A `clip_download_helper.py` script is included to download the clips listed in `clips.json`.  Current it only supports .zip web resources. When run, it will look for all the specified
+file paths and download any that are missing.  Think about how this interacts with reorganization- it will unzip files directly into the ./videos directory, however they can be moved afterwards. 
+If they are moved, however, they won't be found when the script runs. 
+
+A useful place to get clips in the internet archive is at https://archive.org/details/animationandcartoons?sort=-date&and%5B%5D=year%3A%5B1900+TO+1950%5D	

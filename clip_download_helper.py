@@ -4,71 +4,109 @@ import requests
 from pathlib import Path
 from zipfile import ZipFile
 from tqdm import tqdm
+from urllib.parse import urlparse
 
 VIDEO_JSON_PATH = "clips.json"
 VIDEOS_DIR = Path("./videos")
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
 
-# Load your JSON
+
+def download_file(url: str, dest: Path):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest.exists():
+        print(f"{dest.name} already exists, skipping download.")
+        return
+
+    print(f"Downloading {dest.name}...")
+    r = requests.get(url, stream=True)
+    r.raise_for_status()
+
+    total = int(r.headers.get("content-length", 0))
+    with open(dest, "wb") as f, tqdm(
+        total=total, unit="B", unit_scale=True, desc=dest.name
+    ) as pbar:
+        for chunk in r.iter_content(chunk_size=1024):
+            if chunk:
+                f.write(chunk)
+                pbar.update(len(chunk))
+
+
+def process_zip(url: str):
+    zip_name = Path(urlparse(url).path).name
+    if not zip_name.endswith(".zip"):
+        raise ValueError(f"Expected zip, got: {url}")
+
+    zip_path = VIDEOS_DIR / zip_name
+    download_file(url, zip_path)
+
+    print(f"Unzipping {zip_name}...")
+    with ZipFile(zip_path, "r") as z:
+        z.extractall(VIDEOS_DIR)
+
+    print(f"Removing {zip_name}...")
+    zip_path.unlink()
+
+
+def process_single_video(url: str):
+    video_name = Path(urlparse(url).path).name
+    ext = Path(video_name).suffix.lower()
+
+    if ext not in VIDEO_EXTENSIONS:
+        raise ValueError(f"Unsupported video type: {url}")
+
+    dest_path = VIDEOS_DIR / video_name
+    download_file(url, dest_path)
+
+
+# ------------------ main ------------------
+
 with open(VIDEO_JSON_PATH, "r", encoding="utf-8") as f:
     data = json.load(f)
 
-# Step 1-2: Find missing files
-missing_clips = [clip for clip in data["clips"] if not Path(clip["file_path"]).exists()]
+missing_clips = [
+    clip for clip in data["clips"]
+    if not Path(clip["file_path"]).exists()
+]
 
-# Step 3: Collect unique sources
 sources = set()
 clips_missing_source = []
+
 for clip in missing_clips:
-    if "source" in clip and clip["source"]:
-        sources.add(clip["source"])
+    src = clip.get("source")
+    if src:
+        sources.add(src)
     else:
         clips_missing_source.append(clip["name"])
 
-# Step 4: Report clips missing source
 if clips_missing_source:
     print("Warning: These clips are missing a source URL:")
     for name in clips_missing_source:
         print(f"  - {name}")
 
-# Ensure videos directory exists
 VIDEOS_DIR.mkdir(exist_ok=True)
 
-# Step 5-6: Download and unzip sources
 for src_url in sources:
     print(f"\nProcessing source: {src_url}")
-    
-    # Get filename from URL
-    zip_name = src_url.split("/")[-1]
-    if not zip_name.endswith(".zip"):
-        raise ValueError(f"Source is not a zip file: {src_url}")
-    
-    zip_path = VIDEOS_DIR / zip_name
+    path = Path(urlparse(src_url).path)
+    suffix = path.suffix.lower()
 
-    # Download the file if it doesn't exist
-    if not zip_path.exists():
-        print(f"Downloading {zip_name}...")
-        response = requests.get(src_url, stream=True)
-        response.raise_for_status()
-        total = int(response.headers.get("content-length", 0))
-        with open(zip_path, "wb") as f, tqdm(total=total, unit='B', unit_scale=True, desc=zip_name) as pbar:
-            for chunk in response.iter_content(1024):
-                f.write(chunk)
-                pbar.update(len(chunk))
+    if suffix == ".zip":
+        process_zip(src_url)
+    elif suffix in VIDEO_EXTENSIONS:
+        process_single_video(src_url)
     else:
-        print(f"{zip_name} already exists, skipping download.")
+        raise ValueError(f"Unsupported source type: {src_url}")
 
-    # Step 6-7: Unzip and move contents
-    print(f"Unzipping {zip_name}...")
-    with ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall(VIDEOS_DIR)
-    print("Removing zip file...")
-    os.remove(zip_path)
+still_missing = [
+    clip["file_path"]
+    for clip in data["clips"]
+    if not Path(clip["file_path"]).exists()
+]
 
-# Step 8: Report still-missing files
-still_missing = [clip["file_path"] for clip in data["clips"] if not Path(clip["file_path"]).exists()]
 if still_missing:
     print("\nThe following files are still missing:")
-    for path in still_missing:
-        print(f"  - {path}")
+    for p in still_missing:
+        print(f"  - {p}")
 else:
     print("\nAll video files are present.")

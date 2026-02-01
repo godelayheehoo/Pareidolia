@@ -33,6 +33,36 @@
       "debug_keypress":"l",
       "comments":"This clip is from a different video file",
 	  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
-    }
+    },
+	{
+		"name":	"swordfish_swimming",
+		"file_path":"./videos/Eliza%20On%20Ice%20%281944%2C%20Mighty%20Mouse%2C%20Simon%20LeGree%29.mp4",
+		"start_sec":145.0,
+		"end_sec":148.0,
+		"midi_channel":-1,
+		"midi_note":-1,
+		"debug_keypress":"h",
+		"source":"https://dn710008.ca.archive.org/0/items/eliza-on-ice-1944-mighty-mouse-simon-legree/Eliza%20On%20Ice%20%281944%2C%20Mighty%20Mouse%2C%20Simon%20LeGree%29.mp4"
+	},
+	{
+		"name":"child_singing",
+		"file_path":"./videos/1959 - Moonbird.mp4",
+		"start_sec":114.0,
+		"end_sec":-1,
+		"midi_channel":-1,
+		"midi_note":-1,
+		"debug_keypress":"g",
+		"source":"https://ia600100.us.archive.org/2/items/moonbird_20170601/moonbird_20170601.mp4"
+	},
+	{
+		"name":"hillbilly_band",
+		"file_path":"./videos/1946.10.18 - Spree For All.mp4",
+		"start_sec":252.0,
+		"end_sec":300.0,
+		"midi_channel":-1,
+		"midi_note":-1,
+		"debug_keypress":"f",
+		"source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
+	}
   ]
 }
