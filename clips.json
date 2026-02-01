@@ -2,34 +2,37 @@
   "clips": [
     {
       "name": "intro_loop",
-      "file_path": "./videos/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
+      "file_path": "./videos/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
       "start_sec": 165.2,
       "end_sec": 166.5,
       "midi_channel": 1,
       "midi_note": 36,
       "exclusive": true,
       "debug_keypress":"j",
-      "comments": "This is the intro loop clip"
+      "comments": "This is the intro loop clip",
+	  "source":"https://archive.org/compress/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint/formats=MPEG4&file=/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint.zip"
     },
     {
       "name": "chase_section",
-      "file_path": "./videos/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
+      "file_path": "./videos/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
       "start_sec": 63.0,
       "end_sec": -1,
       "midi_channel": 1,
       "midi_note": 38,
       "debug_keypress":"k",
-      "comments":""
+      "comments":"",
+	  "source":"https://archive.org/compress/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint/formats=MPEG4&file=/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint.zip"
     },
     {
       "name": "dog_and_cat_singing",
-      "file_path": "./videos/1946/1946.02.22 - Cheese Burglar.mp4",
+      "file_path": "./videos/1946.02.22 - Cheese Burglar.mp4",
       "start_sec": 37.0,
       "end_sec": 75.0,
       "midi_channel": -1,
       "midi_note": 40,
       "debug_keypress":"l",
-      "comments":"This clip is from a different video file"
+      "comments":"This clip is from a different video file",
+	  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
     }
   ]
 }

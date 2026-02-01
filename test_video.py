@@ -15,6 +15,8 @@ with open("clips.json", "r") as f:
 
 for c in clips_config:
     #convert to URIs
+    if not Path(c['file_path']).exists():
+        raise FileNotFoundError(f"Clip file does not exist: {c['file_path']}. Note the presence of clip_download_helper.py to download missing files.")
     c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
     pprint(c)
     print("\n")
