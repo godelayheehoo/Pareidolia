@@ -1,11 +1,14 @@
 import gi
 gi.require_version("Gst", "1.0")
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gst, Gtk, Gdk, GLib
+from gi.repository import Gst, GLib
 from pathlib import Path
 import json
 from pprint import pprint
-
+import sys
+import termios
+import tty
+import threading
+import signal
 
 #-------------------------------
 # Load Clips Configuration
@@ -14,12 +17,19 @@ with open("clips.json", "r") as f:
     clips_config = json.load(f)['clips']
 
 for c in clips_config:
-    #convert to URIs
+    # Convert to URIs
     if not Path(c['file_path']).exists():
         raise FileNotFoundError(f"Clip file does not exist: {c['file_path']}. Note the presence of clip_download_helper.py to download missing files.")
     c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
     pprint(c)
     print("\n")
+
+# Build a lookup dictionary for keypress -> clip
+keypress_map = {}
+for clip in clips_config:
+    key = clip.get('debug_keypress')
+    if key:
+        keypress_map[key] = clip
 
 # -------------------------------
 # Initialize GStreamer
@@ -31,37 +41,20 @@ import os
 os.environ['GST_DEBUG'] = '2'  # 0=none, 1=error, 2=warning, 3=info, 4=debug, 5=log
 
 # -------------------------------
-# GTK Window
-# -------------------------------
-win = Gtk.Window(title="Video Player")
-win.set_default_size(800, 600)
-win.connect("destroy", Gtk.main_quit)
-
-# -------------------------------
-# GStreamer Playbin with gtksink
+# GStreamer Playbin
 # -------------------------------
 pipeline = Gst.ElementFactory.make("playbin", "player")
 pipeline.set_property("uri", clips_config[0].get('file_path', None))
 
-# gtksink automatically creates a GTK widget for video
-gtksink = Gst.ElementFactory.make("gtksink", "videosink")
-if not gtksink:
-    print("ERROR: Could not create gtksink, trying xvimagesink")
-    gtksink = Gst.ElementFactory.make("xvimagesink", "videosink")
-    
-pipeline.set_property("video-sink", gtksink)
-
-# Get the GTK widget from gtksink
-video_widget = gtksink.get_property("widget")
-video_widget.set_can_focus(True)
-video_widget.grab_focus()
-
-win.add(video_widget)
-win.show_all()
+# For Raspberry Pi, use autovideosink which will automatically select
+# the best available video sink (kmssink, glimagesink, etc.)
+videosink = Gst.ElementFactory.make("autovideosink", "videosink")
+pipeline.set_property("video-sink", videosink)
 
 # Timer/loop state
 loop_timer_id = None
 CHECK_INTERVAL_MS = 100
+loop = None  # Will be set later
 
 def show_clip(clip):
     """
@@ -187,7 +180,7 @@ bus = pipeline.get_bus()
 bus.add_signal_watch()
 bus.connect("message", on_bus_message)
 
-# Start playing initial file - go to PAUSED first, then PLAYING
+# Start playing initial file
 print("\n=== Initial startup ===")
 print("Setting to PAUSED")
 pipeline.set_state(Gst.State.PAUSED)
@@ -201,26 +194,88 @@ print(f"After PLAYING: {state.value_nick}")
 print("=== Startup complete ===\n")
 
 # -------------------------------
-# Keyboard Event Handling
+# Keyboard Input Handler (Terminal)
 # -------------------------------
-def on_key_press(widget, event):
-    key = Gdk.keyval_name(event.keyval)
-    print(f"\nKey pressed: {key}")
+def getch():
+    """Get a single character from stdin without waiting for Enter"""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
 
-    matched = False
-    for clip in clips_config:
-        dbg = clip.get('debug_keypress')
-        if dbg and key == dbg:
-            print(f"Matched debug keypress for clip '{clip['name']}'")
-            show_clip(clip)
-            matched = True
+# Flag to control the keyboard thread
+running = True
+
+def shutdown():
+    """Clean shutdown function"""
+    global running
+    print("\nShutting down...")
+    running = False
+    pipeline.set_state(Gst.State.NULL)
+    if loop:
+        loop.quit()
+
+def keyboard_thread():
+    """Thread to handle keyboard input"""
+    global running
+    print("\n=== Keyboard control active ===")
+    print("Press keys to trigger clips (see clips.json for debug_keypress mappings)")
+    print("Available keys:", ", ".join(sorted(keypress_map.keys())))
+    print("Press 'q' to quit or Ctrl+C\n")
+    
+    while running:
+        try:
+            key = getch()
+            
+            # Handle Ctrl+C (character code 3)
+            if ord(key) == 3:  # Ctrl+C
+                print("\n^C detected")
+                GLib.idle_add(shutdown)
+                break
+            
+            if key == 'q':
+                print("\nQuitting...")
+                GLib.idle_add(shutdown)
+                break
+            
+            if key in keypress_map:
+                clip = keypress_map[key]
+                print(f"\nKey '{key}' pressed -> triggering clip '{clip['name']}'")
+                # Use GLib.idle_add to call show_clip from the main thread
+                GLib.idle_add(show_clip, clip)
+            elif key.isprintable():  # Only print for printable characters
+                print(f"\nKey '{key}' pressed (no clip mapped)")
+                
+        except Exception as e:
+            print(f"Error in keyboard thread: {e}")
+            running = False
             break
-    if not matched:
-        print(f"No debug keypress matched")
 
-win.connect("key-press-event", on_key_press)
+# Signal handler for Ctrl+C from the terminal
+def signal_handler(sig, frame):
+    """Handle SIGINT (Ctrl+C) from terminal"""
+    print("\n^C signal received")
+    GLib.idle_add(shutdown)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+# Start keyboard input thread
+kbd_thread = threading.Thread(target=keyboard_thread, daemon=True)
+kbd_thread.start()
 
 # -------------------------------
-# Start GTK Main Loop
+# Start GLib Main Loop
 # -------------------------------
-Gtk.main()
+loop = GLib.MainLoop()
+
+try:
+    loop.run()
+except KeyboardInterrupt:
+    print("\nInterrupted by user")
+finally:
+    pipeline.set_state(Gst.State.NULL)
+    print("Pipeline stopped")
