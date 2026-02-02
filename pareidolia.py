@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-MIDI-triggered video player for Raspberry Pi 4
-Plays video clips from clips.json when MIDI notes are received
+Multi-video MIDI-triggered player for Raspberry Pi 4
+Supports up to 4 simultaneous video clips triggered by MIDI
+Uses GStreamer compositor for video mixing
 """
 
 import gi
@@ -9,7 +10,6 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst, GLib
 from pathlib import Path
 import json
-from tools import note_to_midi
 from pprint import pprint
 import sys
 import termios
@@ -19,6 +19,15 @@ import signal
 import mido
 import queue
 import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Optional
+from tools import note_to_midi
+
+# -------------------------------
+# Configuration
+# -------------------------------
+MAX_SIMULTANEOUS_VIDEOS = 4
 
 # -------------------------------
 # Load Clips Configuration
@@ -35,14 +44,18 @@ for c in clips_config:
             f"Note the presence of clip_download_helper.py to download missing files."
         )
     c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
+    if c['midi_channel']>0:
+        c['midi_channel'] = c['midi_channel']-1  # Convert to 0-based
+
     if isinstance(c['midi_note'], str):
         c['midi_note'] = note_to_midi(c['midi_note'])
+
     pprint(c)
     print("\n")
 
 # Build lookup dictionaries
 keypress_map = {}  # For debug keyboard control
-midi_map = {}  # For MIDI control
+midi_map = {}  # For MIDI control: (channel, note) -> clip
 
 for clip in clips_config:
     # Debug keypress mapping
@@ -51,32 +64,24 @@ for clip in clips_config:
         keypress_map[key] = clip
     
     # MIDI mapping: (channel, note) -> clip
-    # -1 means "any", so we'll handle that specially
     midi_channel = clip.get('midi_channel', -1)
     midi_note = clip.get('midi_note', -1)
     
     if midi_channel >= 0 and midi_note >= 0:
-        # Specific channel and note
         midi_map[(midi_channel, midi_note)] = clip
     elif midi_channel == -1 and midi_note >= 0:
-        # Any channel, specific note
         if 'any_channel' not in midi_map:
             midi_map['any_channel'] = {}
         midi_map['any_channel'][midi_note] = clip
     elif midi_channel >= 0 and midi_note == -1:
-        # Specific channel, any note
         if 'any_note' not in midi_map:
             midi_map['any_note'] = {}
         midi_map['any_note'][midi_channel] = clip
     elif midi_channel == -1 and midi_note == -1:
-        # Any channel, any note
         midi_map['any_any'] = clip
 
 print("\nMIDI mapping created:")
 print(f"  Specific mappings: {len([k for k in midi_map.keys() if isinstance(k, tuple)])}")
-print(f"  Any-channel notes: {len(midi_map.get('any_channel', {}))}")
-print(f"  Any-note channels: {len(midi_map.get('any_note', {}))}")
-print(f"  Any-any: {'yes' if 'any_any' in midi_map else 'no'}")
 
 # -------------------------------
 # Initialize GStreamer
@@ -85,35 +90,46 @@ print("\nInitializing GStreamer...")
 Gst.init(None)
 
 import os
-os.environ['GST_DEBUG'] = '2'  # 0=none, 1=error, 2=warning, 3=info, 4=debug, 5=log
-
-# Try to encourage fullscreen via environment variables
-# Different video sinks respect different variables
-os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
-os.environ['SDL_VIDEO_CENTERED'] = '0'
+os.environ['GST_DEBUG'] = '2'
 
 # -------------------------------
-# GStreamer Playbin
+# Active Video Tracking
 # -------------------------------
-pipeline = Gst.ElementFactory.make("playbin", "player")
-pipeline.set_property("uri", clips_config[0].get('file_path', None))
+@dataclass
+class ActiveVideo:
+    """Represents an actively playing video"""
+    clip: dict
+    pipeline: Gst.Element
+    compositor_pad: Gst.Pad
+    loop_timer_id: Optional[int] = None
+    midi_key: tuple = field(default_factory=tuple)  # (channel, note) for tracking
+    start_time: float = field(default_factory=time.time)
 
-# Detect if we're running in a desktop environment or console
+# OrderedDict to track active videos (insertion order = age)
+active_videos: OrderedDict[tuple, ActiveVideo] = OrderedDict()
+
+# -------------------------------
+# Main Compositor Pipeline
+# -------------------------------
 def is_desktop_environment():
     """Check if we're running in a desktop/X11 environment"""
-    # Check for DISPLAY variable (X11)
     if os.environ.get('DISPLAY'):
         return True
-    # Check for WAYLAND_DISPLAY (Wayland)
     if os.environ.get('WAYLAND_DISPLAY'):
         return True
-    # Check if XDG_SESSION_TYPE indicates graphical
     session_type = os.environ.get('XDG_SESSION_TYPE', '')
     if session_type in ('x11', 'wayland'):
         return True
     return False
 
-# Choose video sink based on environment
+# Create main pipeline
+main_pipeline = Gst.Pipeline.new("main_pipeline")
+
+# Create compositor
+compositor = Gst.ElementFactory.make("compositor", "compositor")
+compositor.set_property("background", 1)  # Black background
+
+# Create video sink
 if is_desktop_environment():
     print("Desktop environment detected - using autovideosink")
     videosink = Gst.ElementFactory.make("autovideosink", "videosink")
@@ -123,147 +139,267 @@ else:
     videosink = Gst.ElementFactory.make("kmssink", "videosink")
     if videosink:
         print("kmssink loaded successfully")
-        # Set fullscreen property if available
         try:
             videosink.set_property("fullscreen", True)
         except:
-            pass  # Property may not exist, that's okay
+            pass
     else:
         print("WARNING: kmssink not available, falling back to autovideosink")
         videosink = Gst.ElementFactory.make("autovideosink", "videosink")
 
-pipeline.set_property("video-sink", videosink)
+# Add elements to pipeline
+main_pipeline.add(compositor)
+main_pipeline.add(videosink)
 
-# Get the bus for message handling
-bus = pipeline.get_bus()
+# Link compositor to videosink
+compositor.link(videosink)
 
-# Timer/loop state
-loop_timer_id = None
-CHECK_INTERVAL_MS = 100
-loop = None  # Will be set later
-current_clip = None  # Track current clip for exclusivity
+# Get bus for message handling
+bus = main_pipeline.get_bus()
+bus.add_signal_watch()
 
-def show_clip(clip):
+def calculate_layout(num_videos):
     """
-    Seek to start of clip and play it. If end_sec >= 0, install a GLib timeout
-    that checks position and loops back to start when end is reached. If end_sec
-    == -1, play indefinitely and remove any existing loop timer.
+    Calculate positions and sizes for videos based on count.
+    Returns list of (x, y, width, height) in pixels for 1920x1080 output.
     """
-    global loop_timer_id, current_clip
-
-    print(f"\n=== show_clip called for '{clip['name']}' ===")
+    width = 1920
+    height = 1080
     
-    # Check if this clip is marked as exclusive and is already playing
-    if clip.get('exclusive', False) and current_clip == clip:
-        print(f"  Clip '{clip['name']}' is exclusive and already playing - ignoring")
+    if num_videos == 1:
+        return [(0, 0, width, height)]
+    elif num_videos == 2:
+        # Side by side
+        half_width = width // 2
+        return [
+            (0, 0, half_width, height),
+            (half_width, 0, half_width, height)
+        ]
+    elif num_videos == 3:
+        # One on left, two stacked on right
+        half_width = width // 2
+        half_height = height // 2
+        return [
+            (0, 0, half_width, height),
+            (half_width, 0, half_width, half_height),
+            (half_width, half_height, half_width, half_height)
+        ]
+    elif num_videos == 4:
+        # 2x2 grid
+        half_width = width // 2
+        half_height = height // 2
+        return [
+            (0, 0, half_width, half_height),
+            (half_width, 0, half_width, half_height),
+            (0, half_height, half_width, half_height),
+            (half_width, half_height, half_width, half_height)
+        ]
+    return []
+
+def update_layout():
+    """Update the position and size of all active video pads in the compositor"""
+    num_videos = len(active_videos)
+    if num_videos == 0:
         return
     
-    current_clip = clip
+    layout = calculate_layout(num_videos)
     
-    # Stop and remove existing loop timer if present
-    if loop_timer_id is not None:
-        print("  Removing existing loop timer")
-        try:
-            GLib.source_remove(loop_timer_id)
-        except Exception as e:
-            print(f"  Error removing timer: {e}")
-        loop_timer_id = None
+    for idx, (key, video) in enumerate(active_videos.items()):
+        if idx >= len(layout):
+            break
+        
+        x, y, w, h = layout[idx]
+        pad = video.compositor_pad
+        
+        # Set pad properties for position and size
+        pad.set_property("xpos", x)
+        pad.set_property("ypos", y)
+        pad.set_property("width", w)
+        pad.set_property("height", h)
+        
+        print(f"  Video {idx} '{video.clip['name']}' -> pos({x},{y}) size({w}x{h})")
 
-    # If the clip points to a different file, update the pipeline URI
-    clip_uri = clip['file_path']
-    current_uri = pipeline.get_property('uri')
+def start_clip_playback(clip, start_ns, end_ns):
+    """
+    Create a new playbin pipeline for a clip and connect it to the compositor.
+    Returns the pipeline.
+    """
+    # Create playbin for this clip
+    playbin = Gst.ElementFactory.make("playbin", f"player_{id(clip)}")
+    playbin.set_property("uri", clip['file_path'])
     
-    print(f"  Current URI: {current_uri}")
-    print(f"  Target URI:  {clip_uri}")
+    # Create a videoscale and videoconvert for the output
+    videobin = Gst.Bin.new(f"videobin_{id(clip)}")
+    videoscale = Gst.ElementFactory.make("videoscale", "videoscale")
+    videoconvert = Gst.ElementFactory.make("videoconvert", "videoconvert")
+    sink = Gst.ElementFactory.make("intervideosink", "intervideosink")
+    sink.set_property("channel", f"channel_{id(clip)}")
     
-    # Get current state
-    ret, state, pending = pipeline.get_state(0)
-    print(f"  Current pipeline state: {state.value_nick}, pending: {pending.value_nick}")
+    videobin.add(videoscale)
+    videobin.add(videoconvert)
+    videobin.add(sink)
     
-    needs_uri_change = (clip_uri != current_uri)
+    videoscale.link(videoconvert)
+    videoconvert.link(sink)
     
-    # If changing files, we need to go to READY to change the URI
-    # This will briefly close/reopen the window, but it's necessary
-    if needs_uri_change:
-        print("  URI changed - going to READY to change file")
-        
-        # Must go to READY (or NULL) to change URI in playbin
-        pipeline.set_state(Gst.State.READY)
-        ret, state, pending = pipeline.get_state(Gst.CLOCK_TIME_NONE)
-        print(f"  After READY: {state.value_nick}")
-        
-        # Change the URI
-        pipeline.set_property('uri', clip_uri)
-        print("  URI property updated")
-        
-        # Now go to PAUSED and wait for preroll
-        pipeline.set_state(Gst.State.PAUSED)
-        ret, state, pending = pipeline.get_state(5 * Gst.SECOND)
-        print(f"  After PAUSED: ret={ret.value_nick}, state={state.value_nick}")
-        
-        if ret == Gst.StateChangeReturn.FAILURE:
-            print("  ERROR: Failed to load new URI!")
-            return
-    else:
-        # Same file - can seek directly while playing for smoother transition
-        print("  Same file - seeking directly without state change")
+    # Add ghost pad
+    pad = videoscale.get_static_pad("sink")
+    ghost_pad = Gst.GhostPad.new("sink", pad)
+    videobin.add_pad(ghost_pad)
     
-    start_ns = int(clip['start_sec'] * Gst.SECOND)
-    end_sec = clip.get('end_sec', -1)
-    end_ns = int(end_sec * Gst.SECOND) if end_sec >= 0 else -1
-
-    print(f"  Seeking to {start_ns / Gst.SECOND}s")
+    playbin.set_property("video-sink", videobin)
     
-    # Seek (works in both PLAYING and PAUSED states)
-    success = pipeline.seek_simple(
+    # Set to PAUSED and wait
+    playbin.set_state(Gst.State.PAUSED)
+    ret, state, pending = playbin.get_state(5 * Gst.SECOND)
+    
+    if ret == Gst.StateChangeReturn.FAILURE:
+        print(f"ERROR: Failed to pause playbin for clip '{clip['name']}'")
+        return None
+    
+    # Seek to start position
+    success = playbin.seek_simple(
         Gst.Format.TIME,
         Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
         start_ns
     )
     
-    print(f"  Seek result: {success}")
+    if not success:
+        print(f"WARNING: Seek failed for clip '{clip['name']}'")
     
-    if success:
-        # Make sure we're playing
-        ret, state, pending = pipeline.get_state(0)
-        if state != Gst.State.PLAYING:
-            print("  Setting to PLAYING")
-            pipeline.set_state(Gst.State.PLAYING)
-            ret, state, pending = pipeline.get_state(1 * Gst.SECOND)
-            print(f"  After PLAYING: {state.value_nick}")
-        print(f"✓ Playing clip '{clip['name']}' from {clip['start_sec']}s to {clip.get('end_sec', 'end')}s")
-    else:
-        print(f"✗ Seek failed for clip '{clip['name']}'")
-        # Try to play anyway
-        pipeline.set_state(Gst.State.PLAYING)
+    # Set to PLAYING
+    playbin.set_state(Gst.State.PLAYING)
+    
+    return playbin
 
-    # If end_sec >= 0, install a timer to loop
+def add_video(clip, midi_key):
+    """
+    Add a new video to the compositor.
+    If at max capacity, remove the oldest video first.
+    """
+    global active_videos
+    
+    print(f"\n=== add_video: '{clip['name']}' (key={midi_key}) ===")
+    
+    # Check if this exact clip is already playing (for exclusive clips)
+    if clip.get('exclusive', False) and midi_key in active_videos:
+        print(f"  Clip is exclusive and already playing - ignoring")
+        return
+    
+    # If at capacity, remove oldest video
+    if len(active_videos) >= MAX_SIMULTANEOUS_VIDEOS:
+        oldest_key = next(iter(active_videos))
+        print(f"  At capacity ({MAX_SIMULTANEOUS_VIDEOS}), removing oldest: {oldest_key}")
+        remove_video(oldest_key)
+    
+    # Calculate timing
+    start_ns = int(clip['start_sec'] * Gst.SECOND)
+    end_sec = clip.get('end_sec', -1)
+    end_ns = int(end_sec * Gst.SECOND) if end_sec >= 0 else -1
+    
+    # Create playbin pipeline
+    playbin = start_clip_playback(clip, start_ns, end_ns)
+    if playbin is None:
+        print("  Failed to create playbin")
+        return
+    
+    # Create intervideosrc to receive video from the playbin
+    intervideosrc = Gst.ElementFactory.make("intervideosrc", f"src_{id(clip)}")
+    intervideosrc.set_property("channel", f"channel_{id(clip)}")
+    
+    # Add intervideosrc to main pipeline
+    main_pipeline.add(intervideosrc)
+    
+    # Request a new sink pad from compositor
+    compositor_pad = compositor.get_request_pad("sink_%u")
+    
+    # Link intervideosrc to compositor pad
+    src_pad = intervideosrc.get_static_pad("src")
+    src_pad.link(compositor_pad)
+    
+    # Set intervideosrc to PLAYING
+    intervideosrc.sync_state_with_parent()
+    
+    # Set up loop timer if needed
+    loop_timer_id = None
     if end_ns >= 0:
-        print(f"  Installing loop timer (check every {CHECK_INTERVAL_MS}ms)")
         def check_loop():
-            # Query current position
-            success_pos, pos = pipeline.query_position(Gst.Format.TIME)
-            if success_pos:
-                if pos >= end_ns:
-                    print(f"  Loop: position {pos/Gst.SECOND}s >= end {end_ns/Gst.SECOND}s, seeking back")
-                    pipeline.seek_simple(
-                        Gst.Format.TIME,
-                        Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                        start_ns
-                    )
-            # Keep the timer running until explicitly removed
+            success_pos, pos = playbin.query_position(Gst.Format.TIME)
+            if success_pos and pos >= end_ns:
+                playbin.seek_simple(
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                    start_ns
+                )
             return True
-
-        loop_timer_id = GLib.timeout_add(CHECK_INTERVAL_MS, check_loop)
-    else:
-        # For clips that play to end (end_sec == -1), set up loop back to start
-        print(f"  Will loop back to start when EOS reached")
-        # The bus message handler will handle this
+        
+        loop_timer_id = GLib.timeout_add(100, check_loop)
     
-    print("=== show_clip complete ===\n")
+    # Create ActiveVideo object
+    active_video = ActiveVideo(
+        clip=clip,
+        pipeline=playbin,
+        compositor_pad=compositor_pad,
+        loop_timer_id=loop_timer_id,
+        midi_key=midi_key,
+        start_time=time.time()
+    )
+    
+    # Add to active videos
+    active_videos[midi_key] = active_video
+    
+    print(f"  Added video. Total active: {len(active_videos)}")
+    
+    # Update layout
+    update_layout()
+    
+    print("=== add_video complete ===\n")
+
+def remove_video(midi_key):
+    """Remove a video from the compositor"""
+    global active_videos
+    
+    if midi_key not in active_videos:
+        print(f"remove_video: key {midi_key} not found in active videos")
+        return
+    
+    print(f"\n=== remove_video: key={midi_key} ===")
+    
+    video = active_videos[midi_key]
+    
+    # Stop loop timer if exists
+    if video.loop_timer_id is not None:
+        GLib.source_remove(video.loop_timer_id)
+    
+    # Stop playbin
+    video.pipeline.set_state(Gst.State.NULL)
+    
+    # Find and remove intervideosrc from main pipeline
+    intervideosrc = main_pipeline.get_by_name(f"src_{id(video.clip)}")
+    if intervideosrc:
+        # Unlink from compositor
+        src_pad = intervideosrc.get_static_pad("src")
+        peer_pad = src_pad.get_peer()
+        if peer_pad:
+            src_pad.unlink(peer_pad)
+            compositor.release_request_pad(peer_pad)
+        
+        # Remove from pipeline
+        intervideosrc.set_state(Gst.State.NULL)
+        main_pipeline.remove(intervideosrc)
+    
+    # Remove from active videos
+    del active_videos[midi_key]
+    
+    print(f"  Removed video. Total active: {len(active_videos)}")
+    
+    # Update layout for remaining videos
+    update_layout()
+    
+    print("=== remove_video complete ===\n")
 
 def on_bus_message(bus, message):
-    """Handle GStreamer bus messages for debugging"""
+    """Handle GStreamer bus messages"""
     t = message.type
     if t == Gst.MessageType.ERROR:
         err, debug = message.parse_error()
@@ -274,35 +410,21 @@ def on_bus_message(bus, message):
         print(f"BUS WARNING: {err}")
     elif t == Gst.MessageType.EOS:
         print("BUS: End of stream")
-        # If current clip has end_sec == -1, loop back to start
-        if current_clip and current_clip.get('end_sec', -1) == -1:
-            print(f"  Looping clip '{current_clip['name']}' back to start")
-            GLib.idle_add(show_clip, current_clip)
     elif t == Gst.MessageType.STATE_CHANGED:
-        if message.src == pipeline:
+        if message.src == main_pipeline:
             old, new, pending = message.parse_state_changed()
-            print(f"BUS: Pipeline state: {old.value_nick} -> {new.value_nick} (pending: {pending.value_nick})")
-    elif t == Gst.MessageType.ASYNC_DONE:
-        print("BUS: ASYNC_DONE - pipeline is ready")
+            print(f"BUS: Main pipeline state: {old.value_nick} -> {new.value_nick}")
     
     return True
 
-# Set up bus watch for regular messages
-bus.add_signal_watch()
 bus.connect("message", on_bus_message)
 
-# Start playing initial file
-print("\n=== Initial startup ===")
-print("Setting to PAUSED")
-pipeline.set_state(Gst.State.PAUSED)
-ret, state, pending = pipeline.get_state(5 * Gst.SECOND)
-print(f"After PAUSED: {state.value_nick}")
-
-print("Setting to PLAYING")
-pipeline.set_state(Gst.State.PLAYING)
-ret, state, pending = pipeline.get_state(1 * Gst.SECOND)
-print(f"After PLAYING: {state.value_nick}")
-print("=== Startup complete ===\n")
+# Start main pipeline
+print("\n=== Starting main pipeline ===")
+main_pipeline.set_state(Gst.State.PLAYING)
+ret, state, pending = main_pipeline.get_state(2 * Gst.SECOND)
+print(f"Main pipeline state: {state.value_nick}")
+print("=== Main pipeline ready ===\n")
 
 # -------------------------------
 # MIDI Setup
@@ -319,11 +441,10 @@ PORT_NAME = next((name for name in inputs if "Deluge MIDI 1" in name), None)
 if PORT_NAME is None:
     print("WARNING: No Deluge MIDI input found! MIDI control will not work.")
     print("Available inputs:", inputs)
-    PORT_NAME = None  # Will skip MIDI thread
+    PORT_NAME = None
 else:
     print(f"Opening MIDI input: {PORT_NAME}")
 
-# MIDI queue and thread
 midi_queue = queue.Queue()
 stop_event = threading.Event()
 
@@ -367,20 +488,35 @@ def process_midi_messages():
             except queue.Empty:
                 break
             
-            # Only process note_on messages with velocity > 0
+            # Process note_on messages with velocity > 0
             if msg.type == 'note_on' and msg.velocity > 0:
-                print(f"\nMIDI: ch={msg.channel} note={msg.note} vel={msg.velocity}")
+                print(f"\nMIDI NOTE_ON: ch={msg.channel} note={msg.note} vel={msg.velocity}")
                 
                 clip = find_clip_for_midi(msg.channel, msg.note)
                 if clip:
                     print(f"  → Triggering clip '{clip['name']}'")
-                    show_clip(clip)
+                    midi_key = (msg.channel, msg.note)
+                    add_video(clip, midi_key)
                 else:
                     print(f"  → No clip mapped to ch={msg.channel} note={msg.note}")
+            
+            # Process note_off messages (or note_on with velocity 0)
+            elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+                print(f"\nMIDI NOTE_OFF: ch={msg.channel} note={msg.note}")
+                midi_key = (msg.channel, msg.note)
+                
+                if midi_key in active_videos:
+                    print(f"  → Stopping video for ch={msg.channel} note={msg.note}")
+                    remove_video(midi_key)
+                else:
+                    print(f"  → No active video for ch={msg.channel} note={msg.note}")
+                    
     except Exception as e:
         print(f"Error processing MIDI: {e}")
+        import traceback
+        traceback.print_exc()
     
-    return True  # Keep the timer running
+    return True
 
 # Start MIDI reader thread if port available
 if PORT_NAME:
@@ -393,7 +529,7 @@ if PORT_NAME:
     print("MIDI listening started")
     
     # Install GLib timer to check MIDI queue
-    GLib.timeout_add(10, process_midi_messages)  # Check every 10ms
+    GLib.timeout_add(10, process_midi_messages)
 else:
     print("MIDI listening skipped (no input found)")
 
@@ -413,7 +549,6 @@ def getch():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
-# Flag to control the keyboard thread
 running = True
 
 def shutdown():
@@ -421,8 +556,13 @@ def shutdown():
     global running
     print("\nShutting down...")
     running = False
-    stop_event.set()  # Stop MIDI thread
-    pipeline.set_state(Gst.State.NULL)
+    stop_event.set()
+    
+    # Stop all active videos
+    for key in list(active_videos.keys()):
+        remove_video(key)
+    
+    main_pipeline.set_state(Gst.State.NULL)
     if loop:
         loop.quit()
 
@@ -438,7 +578,6 @@ def keyboard_thread():
         try:
             key = getch()
             
-            # Handle Ctrl+C (character code 3)
             if ord(key) == 3:  # Ctrl+C
                 print("\n^C detected")
                 GLib.idle_add(shutdown)
@@ -452,9 +591,10 @@ def keyboard_thread():
             if key in keypress_map:
                 clip = keypress_map[key]
                 print(f"\nKey '{key}' pressed → triggering clip '{clip['name']}'")
-                # Use GLib.idle_add to call show_clip from the main thread
-                GLib.idle_add(show_clip, clip)
-            elif key.isprintable():  # Only print for printable characters
+                # Use a fake MIDI key for keyboard triggers
+                midi_key = ('keyboard', ord(key))
+                GLib.idle_add(add_video, clip, midi_key)
+            elif key.isprintable():
                 print(f"\nKey '{key}' pressed (no clip mapped)")
                 
         except Exception as e:
@@ -462,7 +602,6 @@ def keyboard_thread():
             running = False
             break
 
-# Signal handler for Ctrl+C from the terminal
 def signal_handler(sig, frame):
     """Handle SIGINT (Ctrl+C) from terminal"""
     print("\n^C signal received")
@@ -488,6 +627,8 @@ except KeyboardInterrupt:
     print("\nInterrupted by user")
 finally:
     stop_event.set()
-    pipeline.set_state(Gst.State.NULL)
+    for key in list(active_videos.keys()):
+        remove_video(key)
+    main_pipeline.set_state(Gst.State.NULL)
     print("Pipeline stopped")
     print("Exited cleanly")
