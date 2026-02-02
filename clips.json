@@ -6,7 +6,7 @@
       "start_sec": 165.2,
       "end_sec": 166.5,
       "midi_channel": -1,
-      "midi_note": "C3",
+      "midi_note": 5,
       "exclusive": true,
       "debug_keypress":"j",
       "comments": "This is the intro loop clip",
@@ -29,7 +29,7 @@
       "start_sec": 37.0,
       "end_sec": 75.0,
       "midi_channel": -1,
-      "midi_note": 40,
+      "midi_note": "D3",
       "debug_keypress":"l",
       "comments":"This clip is from a different video file",
 	  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
@@ -50,7 +50,7 @@
 		"start_sec":114.0,
 		"end_sec":-1,
 		"midi_channel":-1,
-		"midi_note":44,
+		"midi_note":"F3",
 		"debug_keypress":"g",
 		"source":"https://ia600100.us.archive.org/2/items/moonbird_20170601/moonbird_20170601.mp4"
 	},
@@ -60,7 +60,7 @@
 		"start_sec":252.0,
 		"end_sec":300.0,
 		"midi_channel":-1,
-		"midi_note":56,
+		"midi_note":"F2",
 		"debug_keypress":"f",
 		"source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
 	}
