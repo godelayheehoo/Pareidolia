@@ -5,8 +5,8 @@
       "file_path": "./videos/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
       "start_sec": 165.2,
       "end_sec": 166.5,
-      "midi_channel": 1,
-      "midi_note": 36,
+      "midi_channel": -1,
+      "midi_note": 60,
       "exclusive": true,
       "debug_keypress":"j",
       "comments": "This is the intro loop clip",
@@ -40,7 +40,7 @@
 		"start_sec":145.0,
 		"end_sec":148.0,
 		"midi_channel":-1,
-		"midi_note":-1,
+		"midi_note":62,
 		"debug_keypress":"h",
 		"source":"https://dn710008.ca.archive.org/0/items/eliza-on-ice-1944-mighty-mouse-simon-legree/Eliza%20On%20Ice%20%281944%2C%20Mighty%20Mouse%2C%20Simon%20LeGree%29.mp4"
 	},
@@ -50,7 +50,7 @@
 		"start_sec":114.0,
 		"end_sec":-1,
 		"midi_channel":-1,
-		"midi_note":-1,
+		"midi_note":44,
 		"debug_keypress":"g",
 		"source":"https://ia600100.us.archive.org/2/items/moonbird_20170601/moonbird_20170601.mp4"
 	},
@@ -60,7 +60,7 @@
 		"start_sec":252.0,
 		"end_sec":300.0,
 		"midi_channel":-1,
-		"midi_note":-1,
+		"midi_note":56,
 		"debug_keypress":"f",
 		"source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
 	}
