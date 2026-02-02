@@ -84,14 +84,33 @@ Gst.init(None)
 import os
 os.environ['GST_DEBUG'] = '2'  # 0=none, 1=error, 2=warning, 3=info, 4=debug, 5=log
 
+# Try to encourage fullscreen via environment variables
+# Different video sinks respect different variables
+os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
+os.environ['SDL_VIDEO_CENTERED'] = '0'
+
 # -------------------------------
 # GStreamer Playbin
 # -------------------------------
 pipeline = Gst.ElementFactory.make("playbin", "player")
 pipeline.set_property("uri", clips_config[0].get('file_path', None))
 
-videosink = Gst.ElementFactory.make("autovideosink", "videosink")
+# Try kmssink first (best for Raspberry Pi - renders directly to display, always fullscreen)
+videosink = Gst.ElementFactory.make("kmssink", "videosink")
+if videosink:
+    print("Using kmssink (direct framebuffer rendering - fullscreen native)")
+    # kmssink renders directly to the display, no window manager needed
+    # Set connector-id if you need a specific display
+    # videosink.set_property("connector-id", 0)
+else:
+    print("kmssink not available, falling back to autovideosink")
+    videosink = Gst.ElementFactory.make("autovideosink", "videosink")
+    print("Note: Press F11 for fullscreen with this sink")
+
 pipeline.set_property("video-sink", videosink)
+
+# Get the bus for message handling
+bus = pipeline.get_bus()
 
 # Timer/loop state
 loop_timer_id = None
@@ -136,25 +155,33 @@ def show_clip(clip):
     ret, state, pending = pipeline.get_state(0)
     print(f"  Current pipeline state: {state.value_nick}, pending: {pending.value_nick}")
     
-    # If changing files, need to stop, change URI, then start again
-    if clip_uri != current_uri:
-        print("  URI changed - resetting pipeline")
+    needs_uri_change = (clip_uri != current_uri)
+    
+    # If changing files, we need to go to READY to change the URI
+    # This will briefly close/reopen the window, but it's necessary
+    if needs_uri_change:
+        print("  URI changed - going to READY to change file")
+        
+        # Must go to READY (or NULL) to change URI in playbin
         pipeline.set_state(Gst.State.READY)
         ret, state, pending = pipeline.get_state(Gst.CLOCK_TIME_NONE)
         print(f"  After READY: {state.value_nick}")
         
+        # Change the URI
         pipeline.set_property('uri', clip_uri)
         print("  URI property updated")
-
-    # Set to PAUSED state and wait for it to be ready
-    print("  Setting to PAUSED")
-    pipeline.set_state(Gst.State.PAUSED)
-    ret, state, pending = pipeline.get_state(5 * Gst.SECOND)  # 5 second timeout
-    print(f"  After PAUSED: ret={ret.value_nick}, state={state.value_nick}, pending={pending.value_nick}")
-    
-    if ret == Gst.StateChangeReturn.FAILURE:
-        print("  ERROR: Failed to pause pipeline!")
-        return
+        
+        # Now go to PAUSED and wait for preroll
+        pipeline.set_state(Gst.State.PAUSED)
+        ret, state, pending = pipeline.get_state(5 * Gst.SECOND)
+        print(f"  After PAUSED: ret={ret.value_nick}, state={state.value_nick}")
+        
+        if ret == Gst.StateChangeReturn.FAILURE:
+            print("  ERROR: Failed to load new URI!")
+            return
+    else:
+        # Same file - can seek directly while playing for smoother transition
+        print("  Same file - seeking directly without state change")
     
     start_ns = int(clip['start_sec'] * Gst.SECOND)
     end_sec = clip.get('end_sec', -1)
@@ -162,7 +189,7 @@ def show_clip(clip):
 
     print(f"  Seeking to {start_ns / Gst.SECOND}s")
     
-    # Now seek while in PAUSED state
+    # Seek (works in both PLAYING and PAUSED states)
     success = pipeline.seek_simple(
         Gst.Format.TIME,
         Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
@@ -172,11 +199,13 @@ def show_clip(clip):
     print(f"  Seek result: {success}")
     
     if success:
-        # After successful seek, set to PLAYING
-        print("  Setting to PLAYING")
-        pipeline.set_state(Gst.State.PLAYING)
-        ret, state, pending = pipeline.get_state(1 * Gst.SECOND)
-        print(f"  After PLAYING: {state.value_nick}")
+        # Make sure we're playing
+        ret, state, pending = pipeline.get_state(0)
+        if state != Gst.State.PLAYING:
+            print("  Setting to PLAYING")
+            pipeline.set_state(Gst.State.PLAYING)
+            ret, state, pending = pipeline.get_state(1 * Gst.SECOND)
+            print(f"  After PLAYING: {state.value_nick}")
         print(f"✓ Playing clip '{clip['name']}' from {clip['start_sec']}s to {clip.get('end_sec', 'end')}s")
     else:
         print(f"✗ Seek failed for clip '{clip['name']}'")
@@ -233,8 +262,7 @@ def on_bus_message(bus, message):
     
     return True
 
-# Set up bus watch
-bus = pipeline.get_bus()
+# Set up bus watch for regular messages
 bus.add_signal_watch()
 bus.connect("message", on_bus_message)
 
