@@ -16,7 +16,7 @@ A Python-based visualizer that plays video clips in response to MIDI input. Desi
 - **JSON-configurable clips**:
   - Each clip specifies:
     - `file_path` → path to video file
-    - `midi_number` → MIDI note number to trigger it
+    - `midi_number` → MIDI note number to trigger it.  This can also be a midi note-- C3 is set to 60.  Must enter whole notes or sharps (with a #), no flats. 
     - `channel` → MIDI channel
     - `start_sec` → where to start playback
     - `end_sec` → where to end playback (`-1` indicates endless looping)
@@ -45,9 +45,15 @@ A Python-based visualizer that plays video clips in response to MIDI input. Desi
   }
 ]
 
+## Concerning chords
+Note that MIDI is an inherently serial format. As such, chords are actually transmitted as sequential notes.  This may cause odd or unexpected behavior if you have multiple notes of a chord set for clips on the same channel. 
+
 ## Getting videos
 A `clip_download_helper.py` script is included to download the clips listed in `clips.json`.  Current it only supports .zip and single-video file web resources. When run, it will look for all the specified
 file paths and download any that are missing.  Think about how this interacts with reorganization- it will unzip or place files directly into the ./videos directory, however they can be moved afterwards. 
 If they are moved, however, they won't be found when the script runs. 
 
 A useful place to get clips in the internet archive is at https://archive.org/details/animationandcartoons?sort=-date&and%5B%5D=year%3A%5B1900+TO+1950%5D	
+
+## Running the program
+This can be run directrly from the rpi in console GUI mode.  It behaves slightly better if run from terminal mode though, you can switch between modes using `sudo raspi-config`

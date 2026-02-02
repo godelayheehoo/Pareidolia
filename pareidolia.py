@@ -9,6 +9,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst, GLib
 from pathlib import Path
 import json
+from tools import note_to_midi
 from pprint import pprint
 import sys
 import termios
@@ -34,6 +35,8 @@ for c in clips_config:
             f"Note the presence of clip_download_helper.py to download missing files."
         )
     c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
+    if isinstance(c['midi_note'], str):
+        c['midi_note'] = note_to_midi(c['midi_note'])
     pprint(c)
     print("\n")
 
@@ -95,17 +98,39 @@ os.environ['SDL_VIDEO_CENTERED'] = '0'
 pipeline = Gst.ElementFactory.make("playbin", "player")
 pipeline.set_property("uri", clips_config[0].get('file_path', None))
 
-# Try kmssink first (best for Raspberry Pi - renders directly to display, always fullscreen)
-videosink = Gst.ElementFactory.make("kmssink", "videosink")
-if videosink:
-    print("Using kmssink (direct framebuffer rendering - fullscreen native)")
-    # kmssink renders directly to the display, no window manager needed
-    # Set connector-id if you need a specific display
-    # videosink.set_property("connector-id", 0)
-else:
-    print("kmssink not available, falling back to autovideosink")
+# Detect if we're running in a desktop environment or console
+def is_desktop_environment():
+    """Check if we're running in a desktop/X11 environment"""
+    # Check for DISPLAY variable (X11)
+    if os.environ.get('DISPLAY'):
+        return True
+    # Check for WAYLAND_DISPLAY (Wayland)
+    if os.environ.get('WAYLAND_DISPLAY'):
+        return True
+    # Check if XDG_SESSION_TYPE indicates graphical
+    session_type = os.environ.get('XDG_SESSION_TYPE', '')
+    if session_type in ('x11', 'wayland'):
+        return True
+    return False
+
+# Choose video sink based on environment
+if is_desktop_environment():
+    print("Desktop environment detected - using autovideosink")
     videosink = Gst.ElementFactory.make("autovideosink", "videosink")
-    print("Note: Press F11 for fullscreen with this sink")
+    print("Note: Press F11 for fullscreen in desktop mode")
+else:
+    print("Console mode detected - using kmssink for fullscreen")
+    videosink = Gst.ElementFactory.make("kmssink", "videosink")
+    if videosink:
+        print("kmssink loaded successfully")
+        # Set fullscreen property if available
+        try:
+            videosink.set_property("fullscreen", True)
+        except:
+            pass  # Property may not exist, that's okay
+    else:
+        print("WARNING: kmssink not available, falling back to autovideosink")
+        videosink = Gst.ElementFactory.make("autovideosink", "videosink")
 
 pipeline.set_property("video-sink", videosink)
 
