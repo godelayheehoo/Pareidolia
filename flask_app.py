@@ -1,11 +1,13 @@
 from flask import Flask, request, render_template_string, redirect
 import json, os, subprocess, signal
 
+from flask import send_from_directory
+
 app = Flask(__name__)
 
 CLIPS_FILE = "./processed_clips.json"
 VIDEO_SCRIPT = "./pareidolia_no_ram.py"
-VIDEO_FOLDER = "./videos"
+VIDEO_FOLDER = "./processed_clips"
 THUMB_FOLDER = "./thumbnails"
 os.makedirs(THUMB_FOLDER, exist_ok=True)
 
@@ -49,6 +51,10 @@ def generate_thumbnail(clip):
         ])
     return thumb_path
 
+@app.route('/thumbnails/<filename>')
+def serve_thumbnail(filename):
+    return send_from_directory(THUMB_FOLDER, filename)
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     global video_process
@@ -63,13 +69,15 @@ def index():
             note = request.form.get(f"note_{i}")
             filename = request.form.get(f"clip_{i}")
             name = request.form.get(f"name_{i}")
+            desc = request.form.get(f"desc_{i}")
             file_path = next((c["file_path"] for c in clips if c["name"] == name), "")
             if channel is not None and note and filename:
                 new_clips.append({
                     "name": name,
                     "midi_channel": int(channel),
                     "midi_note": note,
-                    "file_path": file_path
+                    "file_path": file_path,
+                    "comments": desc
                 })
         save_clips(new_clips)
 
@@ -86,34 +94,28 @@ def index():
     html = """
     <h2>Clip Mappings</h2>
     <form method="POST">
-      <table border="1" cellpadding="5">
-        <tr><th>Thumbnail</th><th>Name</th><th>Channel</th><th>Note</th><th>Clip</th></tr>
+    <table border="1" cellpadding="5">
+        <tr><th>Thumbnail</th><th>Name</th><th>Channel</th><th>Note</th><th>Description</th></tr>
         {% for i, clip in clips %}
         <tr>
-          <td><img src="{{clip['thumbnail']}}" width="160"></td>
-          <td>{{clip['name']}}</td>
-          <td>
+        <td><img src="/thumbnails/{{clip['thumbnail'].split('/')[-1]}}" width="160"></td>
+        <td>{{clip['name']}}</td>
+        <td>
             <select name="channel_{{i}}">
-              <option value="-1" {% if clip.get('midi_channel') == -1 or clip.get('midi_channel')=='-1' %}selected{% endif %}>-1</option>
-              {% for ch in range(1, 17) %}
-              <option value="{{ch}}" {% if clip.get('midi_channel') == ch or clip.get('midi_channel')==str(ch) %}selected{% endif %}>{{ch}}</option>
-              {% endfor %}
+            <option value="-1" {% if clip.get('midi_channel') == -1 or clip.get('midi_channel')=='-1' %}selected{% endif %}>-1</option>
+            {% for ch in range(1, 17) %}
+            <option value="{{ch}}" {% if clip.get('midi_channel') == ch or clip.get('midi_channel')==ch|string %}selected{% endif %}>{{ch}}</option>
+            {% endfor %}
             </select>
-          </td>
-          <td><input type="text" name="note_{{i}}" value="{{clip.get('midi_note','')}}"></td>
-          <td>
-            <select name="clip_{{i}}">
-              {% for f in clip_files %}
-              <option value="{{f}}" {% if f==clip['file_path'].split('/')[-1] %}selected{% endif %}>{{f}}</option>
-              {% endfor %}
-            </select>
-          </td>
-          <input type="hidden" name="name_{{i}}" value="{{clip['name']}}">
+        </td>
+        <td><input type="text" name="note_{{i}}" value="{{clip.get('midi_note','')}}"></td>
+        <td>{{clip.get('comments','')}}</td>
+        <input type="hidden" name="name_{{i}}" value="{{clip['name']}}">
         </tr>
         {% endfor %}
-      </table>
-      <input type="hidden" name="rows" value="{{clips|length}}">
-      <button type="submit">Save & Restart</button>
+    </table>
+    <input type="hidden" name="rows" value="{{clips|length}}">
+    <button type="submit">Save & Restart</button>
     </form>
     """
     return render_template_string(html, clips=list(enumerate(clips)), clip_files=clip_files)
