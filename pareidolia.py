@@ -23,7 +23,6 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 from tools import note_to_midi
-
 # -------------------------------
 # Configuration
 # -------------------------------
@@ -44,12 +43,10 @@ for c in clips_config:
             f"Note the presence of clip_download_helper.py to download missing files."
         )
     c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
-    if c['midi_channel']>0:
-        c['midi_channel'] = c['midi_channel']-1  # Convert to 0-based
-
-    if isinstance(c['midi_note'], str):
+    if isinstance(c['midi_note'],str):
         c['midi_note'] = note_to_midi(c['midi_note'])
-
+    if c['midi_channel']>0:
+        c['midi_channel'] = c['midi_channel'] - 1  # Convert to 0-based
     pprint(c)
     print("\n")
 
@@ -107,6 +104,9 @@ class ActiveVideo:
 
 # OrderedDict to track active videos (insertion order = age)
 active_videos: OrderedDict[tuple, ActiveVideo] = OrderedDict()
+
+# Global main loop reference
+loop = None
 
 # -------------------------------
 # Main Compositor Pipeline
@@ -221,44 +221,70 @@ def update_layout():
 
 def start_clip_playback(clip, start_ns, end_ns):
     """
-    Create a new playbin pipeline for a clip and connect it to the compositor.
-    Returns the pipeline.
+    Create a video pipeline for a clip and return elements needed.
+    Returns (bin, src_pad) where bin is the decoder bin and src_pad connects to compositor.
     """
-    # Create playbin for this clip
-    playbin = Gst.ElementFactory.make("playbin", f"player_{id(clip)}")
-    playbin.set_property("uri", clip['file_path'])
+    # Create a bin for this clip's pipeline
+    clip_bin = Gst.Bin.new(f"clip_bin_{id(clip)}")
     
-    # Create a videoscale and videoconvert for the output
-    videobin = Gst.Bin.new(f"videobin_{id(clip)}")
-    videoscale = Gst.ElementFactory.make("videoscale", "videoscale")
-    videoconvert = Gst.ElementFactory.make("videoconvert", "videoconvert")
-    sink = Gst.ElementFactory.make("intervideosink", "intervideosink")
-    sink.set_property("channel", f"channel_{id(clip)}")
+    # Use uridecodebin for efficient decoding
+    uridecodebin = Gst.ElementFactory.make("uridecodebin", f"decode_{id(clip)}")
+    uridecodebin.set_property("uri", clip['file_path'])
     
-    videobin.add(videoscale)
-    videobin.add(videoconvert)
-    videobin.add(sink)
+    # Add queue for buffering
+    queue = Gst.ElementFactory.make("queue", f"queue_{id(clip)}")
+    queue.set_property("max-size-buffers", 3)  # Keep buffer small
     
-    videoscale.link(videoconvert)
-    videoconvert.link(sink)
+    # Add videoconvert and videoscale for format conversion
+    videoconvert = Gst.ElementFactory.make("videoconvert", f"convert_{id(clip)}")
+    videoscale = Gst.ElementFactory.make("videoscale", f"scale_{id(clip)}")
+    videorate = Gst.ElementFactory.make("videorate", f"rate_{id(clip)}")
+    videorate.set_property("drop-only", True)  # Only drop frames, don't duplicate
     
-    # Add ghost pad
-    pad = videoscale.get_static_pad("sink")
-    ghost_pad = Gst.GhostPad.new("sink", pad)
-    videobin.add_pad(ghost_pad)
+    # Add elements to bin
+    clip_bin.add(uridecodebin)
+    clip_bin.add(queue)
+    clip_bin.add(videoconvert)
+    clip_bin.add(videoscale)
+    clip_bin.add(videorate)
     
-    playbin.set_property("video-sink", videobin)
+    # Link the chain (will link uridecodebin dynamically via pad-added)
+    queue.link(videoconvert)
+    videoconvert.link(videoscale)
+    videoscale.link(videorate)
+    
+    # Create ghost pad for output
+    src_pad = videorate.get_static_pad("src")
+    ghost_pad = Gst.GhostPad.new("src", src_pad)
+    clip_bin.add_pad(ghost_pad)
+    
+    # Handle dynamic pad from uridecodebin
+    def on_pad_added(element, pad):
+        # Only link video pads
+        caps = pad.get_current_caps()
+        if caps:
+            structure = caps.get_structure(0)
+            if structure.get_name().startswith("video/"):
+                sink_pad = queue.get_static_pad("sink")
+                if not sink_pad.is_linked():
+                    pad.link(sink_pad)
+    
+    uridecodebin.connect("pad-added", on_pad_added)
+    
+    # Add bin to main pipeline
+    main_pipeline.add(clip_bin)
     
     # Set to PAUSED and wait
-    playbin.set_state(Gst.State.PAUSED)
-    ret, state, pending = playbin.get_state(5 * Gst.SECOND)
+    clip_bin.set_state(Gst.State.PAUSED)
+    ret, state, pending = clip_bin.get_state(5 * Gst.SECOND)
     
     if ret == Gst.StateChangeReturn.FAILURE:
-        print(f"ERROR: Failed to pause playbin for clip '{clip['name']}'")
-        return None
+        print(f"ERROR: Failed to pause decoder for clip '{clip['name']}'")
+        main_pipeline.remove(clip_bin)
+        return None, None
     
     # Seek to start position
-    success = playbin.seek_simple(
+    success = clip_bin.seek_simple(
         Gst.Format.TIME,
         Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
         start_ns
@@ -268,9 +294,9 @@ def start_clip_playback(clip, start_ns, end_ns):
         print(f"WARNING: Seek failed for clip '{clip['name']}'")
     
     # Set to PLAYING
-    playbin.set_state(Gst.State.PLAYING)
+    clip_bin.set_state(Gst.State.PLAYING)
     
-    return playbin
+    return clip_bin, ghost_pad
 
 def add_video(clip, midi_key):
     """
@@ -297,36 +323,29 @@ def add_video(clip, midi_key):
     end_sec = clip.get('end_sec', -1)
     end_ns = int(end_sec * Gst.SECOND) if end_sec >= 0 else -1
     
-    # Create playbin pipeline
-    playbin = start_clip_playback(clip, start_ns, end_ns)
-    if playbin is None:
-        print("  Failed to create playbin")
+    # Create decoder bin
+    clip_bin, src_pad = start_clip_playback(clip, start_ns, end_ns)
+    if clip_bin is None:
+        print("  Failed to create decoder")
         return
-    
-    # Create intervideosrc to receive video from the playbin
-    intervideosrc = Gst.ElementFactory.make("intervideosrc", f"src_{id(clip)}")
-    intervideosrc.set_property("channel", f"channel_{id(clip)}")
-    
-    # Add intervideosrc to main pipeline
-    main_pipeline.add(intervideosrc)
     
     # Request a new sink pad from compositor
     compositor_pad = compositor.get_request_pad("sink_%u")
     
-    # Link intervideosrc to compositor pad
-    src_pad = intervideosrc.get_static_pad("src")
-    src_pad.link(compositor_pad)
+    # Set compositor pad properties to ensure visibility
+    compositor_pad.set_property("alpha", 1.0)  # Fully opaque
+    compositor_pad.set_property("zorder", len(active_videos))  # Stack order
     
-    # Set intervideosrc to PLAYING
-    intervideosrc.sync_state_with_parent()
+    # Link source pad to compositor pad
+    src_pad.link(compositor_pad)
     
     # Set up loop timer if needed
     loop_timer_id = None
     if end_ns >= 0:
         def check_loop():
-            success_pos, pos = playbin.query_position(Gst.Format.TIME)
+            success_pos, pos = clip_bin.query_position(Gst.Format.TIME)
             if success_pos and pos >= end_ns:
-                playbin.seek_simple(
+                clip_bin.seek_simple(
                     Gst.Format.TIME,
                     Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
                     start_ns
@@ -338,7 +357,7 @@ def add_video(clip, midi_key):
     # Create ActiveVideo object
     active_video = ActiveVideo(
         clip=clip,
-        pipeline=playbin,
+        pipeline=clip_bin,
         compositor_pad=compositor_pad,
         loop_timer_id=loop_timer_id,
         midi_key=midi_key,
@@ -371,22 +390,18 @@ def remove_video(midi_key):
     if video.loop_timer_id is not None:
         GLib.source_remove(video.loop_timer_id)
     
-    # Stop playbin
-    video.pipeline.set_state(Gst.State.NULL)
-    
-    # Find and remove intervideosrc from main pipeline
-    intervideosrc = main_pipeline.get_by_name(f"src_{id(video.clip)}")
-    if intervideosrc:
-        # Unlink from compositor
-        src_pad = intervideosrc.get_static_pad("src")
+    # Unlink from compositor
+    clip_bin = video.pipeline
+    src_pad = clip_bin.get_static_pad("src")
+    if src_pad:
         peer_pad = src_pad.get_peer()
         if peer_pad:
             src_pad.unlink(peer_pad)
             compositor.release_request_pad(peer_pad)
-        
-        # Remove from pipeline
-        intervideosrc.set_state(Gst.State.NULL)
-        main_pipeline.remove(intervideosrc)
+    
+    # Stop and remove the bin
+    clip_bin.set_state(Gst.State.NULL)
+    main_pipeline.remove(clip_bin)
     
     # Remove from active videos
     del active_videos[midi_key]
@@ -553,7 +568,7 @@ running = True
 
 def shutdown():
     """Clean shutdown function"""
-    global running
+    global running, loop
     print("\nShutting down...")
     running = False
     stop_event.set()
@@ -563,7 +578,7 @@ def shutdown():
         remove_video(key)
     
     main_pipeline.set_state(Gst.State.NULL)
-    if loop:
+    if loop and loop.is_running():
         loop.quit()
 
 def keyboard_thread():
@@ -605,9 +620,16 @@ def keyboard_thread():
 def signal_handler(sig, frame):
     """Handle SIGINT (Ctrl+C) from terminal"""
     print("\n^C signal received")
-    GLib.idle_add(shutdown)
+    shutdown()
+    sys.exit(0)
 
+# Use Unix signal handling that works with GLib
 signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+# Also set up GLib unix signal handling for better integration
+GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, lambda: shutdown() or False)
+GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: shutdown() or False)
 
 # Start keyboard input thread
 kbd_thread = threading.Thread(target=keyboard_thread, daemon=True)
