@@ -1,0 +1,86 @@
+{
+  "clips": [
+    {
+      "name": "intro_loop",
+      "file_path": "processed_clips/intro_loop_8a44a1ac.mp4",
+      "start_sec": 0,
+      "end_sec": 1.3000000000000114,
+      "midi_channel": 7,
+      "midi_note": "F1",
+      "exclusive": true,
+      "debug_keypress": "j",
+      "comments": "This is the intro loop clip",
+      "source": "https://archive.org/compress/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint/formats=MPEG4&file=/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint.zip",
+      "original_file": "videos/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
+      "original_start": 165.2,
+      "original_end": 166.5
+    },
+    {
+      "name": "chase_section",
+      "file_path": "processed_clips/chase_section_dd4654ab.mp4",
+      "start_sec": 0,
+      "end_sec": -1,
+      "midi_channel": 7,
+      "midi_note": "A1",
+      "debug_keypress": "k",
+      "comments": "",
+      "source": "https://archive.org/compress/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint/formats=MPEG4&file=/PaddyThePelicanPiggyBankRobberyRestoredOriginal16MmPrint.zip",
+      "original_file": "videos/Paddy the Pelican Piggy Bank Robbery [Restored Original 16 mm Print].mp4",
+      "original_start": 63.0,
+      "original_end": -1
+    },
+    {
+      "name": "dog_and_cat_singing",
+      "file_path": "processed_clips/dog_and_cat_singing_5c4a29a8.mp4",
+      "start_sec": 0,
+      "end_sec": 38.0,
+      "midi_channel": -1,
+      "midi_note": "D3",
+      "debug_keypress": "l",
+      "comments": "This clip is from a different video file",
+      "source": "https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+      "original_file": "videos/1946.02.22 - Cheese Burglar.mp4",
+      "original_start": 37.0,
+      "original_end": 75.0
+    },
+    {
+      "name": "swordfish_swimming",
+      "file_path": "processed_clips/swordfish_swimming_1d33ddd2.mp4",
+      "start_sec": 0,
+      "end_sec": 3.0,
+      "midi_channel": -1,
+      "midi_note": "E3",
+      "debug_keypress": "h",
+      "source": "https://dn710008.ca.archive.org/0/items/eliza-on-ice-1944-mighty-mouse-simon-legree/Eliza%20On%20Ice%20%281944%2C%20Mighty%20Mouse%2C%20Simon%20LeGree%29.mp4",
+      "original_file": "videos/Eliza%20On%20Ice%20%281944%2C%20Mighty%20Mouse%2C%20Simon%20LeGree%29.mp4",
+      "original_start": 145.0,
+      "original_end": 148.0
+    },
+    {
+      "name": "child_singing",
+      "file_path": "processed_clips/child_singing_1b920cce.mp4",
+      "start_sec": 0,
+      "end_sec": -1,
+      "midi_channel": -1,
+      "midi_note": "F3",
+      "debug_keypress": "g",
+      "source": "https://ia600100.us.archive.org/2/items/moonbird_20170601/moonbird_20170601.mp4",
+      "original_file": "videos/moonbird_20170601.mp4",
+      "original_start": 114.0,
+      "original_end": -1
+    },
+    {
+      "name": "hillbilly_band",
+      "file_path": "processed_clips/hillbilly_band_e20fa56f.mp4",
+      "start_sec": 0,
+      "end_sec": 48.0,
+      "midi_channel": -1,
+      "midi_note": "F2",
+      "debug_keypress": "f",
+      "source": "https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+      "original_file": "videos/1946.10.18 - Spree For All.mp4",
+      "original_start": 252.0,
+      "original_end": 300.0
+    }
+  ]
+}

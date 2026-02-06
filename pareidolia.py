@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Multi-video MIDI-triggered player for Raspberry Pi 4
-Supports up to 4 simultaneous video clips triggered by MIDI
-Uses GStreamer compositor for video mixing
+Multi-video MIDI-triggered player for Raspberry Pi 4 - RAM PRELOADED VERSION
+Loads all video clips into RAM at startup for instant, high-performance playback.
 """
 
 import gi
@@ -23,44 +22,61 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 from tools import note_to_midi
+
 # -------------------------------
 # Configuration
 # -------------------------------
 MAX_SIMULTANEOUS_VIDEOS = 4
 
+print("=" * 60)
+print("RAM-PRELOADED VIDEO PLAYER")
+print("Loading all clips into memory for maximum performance...")
+print("=" * 60)
+
 # -------------------------------
 # Load Clips Configuration
 # -------------------------------
-print("Loading clips configuration...")
-with open("clips.json", "r") as f:
+print("\nLoading clips configuration...")
+with open("processed_clips.json", "r") as f:
     clips_config = json.load(f)['clips']
 
+# Preload all video files into RAM
+print("\nPreloading video files into RAM...")
 for c in clips_config:
-    # Convert to URIs
-    if not Path(c['file_path']).exists():
-        raise FileNotFoundError(
-            f"Clip file does not exist: {c['file_path']}. "
-            f"Note the presence of clip_download_helper.py to download missing files."
-        )
-    c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
-    if isinstance(c['midi_note'],str):
+    file_path = Path(c['file_path'])
+    if not file_path.exists():
+        raise FileNotFoundError(f"Clip file does not exist: {file_path}")
+    
+    # Read entire file into memory
+    print(f"  Loading: {file_path.name} ({file_path.stat().st_size / 1024 / 1024:.1f} MB)")
+    with open(file_path, 'rb') as f:
+        c['file_data'] = f.read()
+    
+    # Convert to URI for GStreamer (we'll use appsrc instead though)
+    c['file_path'] = str(file_path.resolve().as_uri())
+    
+    # Convert MIDI note if string
+    if isinstance(c['midi_note'], str):
         c['midi_note'] = note_to_midi(c['midi_note'])
-    if c['midi_channel']>0:
+    if c['midi_channel'] > 0:
         c['midi_channel'] = c['midi_channel'] - 1  # Convert to 0-based
-    pprint(c)
-    print("\n")
+    
+    pprint({k: v for k, v in c.items() if k != 'file_data'})  # Don't print binary data
+    print()
+
+total_ram = sum(len(c['file_data']) for c in clips_config) / 1024 / 1024
+print(f"Total RAM used: {total_ram:.1f} MB")
+print("All clips loaded!\n")
 
 # Build lookup dictionaries
-keypress_map = {}  # For debug keyboard control
-midi_map = {}  # For MIDI control: (channel, note) -> clip
+keypress_map = {}
+midi_map = {}
 
 for clip in clips_config:
-    # Debug keypress mapping
     key = clip.get('debug_keypress')
     if key:
         keypress_map[key] = clip
     
-    # MIDI mapping: (channel, note) -> clip
     midi_channel = clip.get('midi_channel', -1)
     midi_note = clip.get('midi_note', -1)
     
@@ -77,8 +93,7 @@ for clip in clips_config:
     elif midi_channel == -1 and midi_note == -1:
         midi_map['any_any'] = clip
 
-print("\nMIDI mapping created:")
-print(f"  Specific mappings: {len([k for k in midi_map.keys() if isinstance(k, tuple)])}")
+print("MIDI mapping created")
 
 # -------------------------------
 # Initialize GStreamer
@@ -98,14 +113,13 @@ class ActiveVideo:
     clip: dict
     pipeline: Gst.Element
     compositor_pad: Gst.Pad
+    appsrc: Gst.Element
     loop_timer_id: Optional[int] = None
-    midi_key: tuple = field(default_factory=tuple)  # (channel, note) for tracking
+    midi_key: tuple = field(default_factory=tuple)
     start_time: float = field(default_factory=time.time)
+    playback_position: int = 0  # For looping
 
-# OrderedDict to track active videos (insertion order = age)
 active_videos: OrderedDict[tuple, ActiveVideo] = OrderedDict()
-
-# Global main loop reference
 loop = None
 
 # -------------------------------
@@ -122,20 +136,16 @@ def is_desktop_environment():
         return True
     return False
 
-# Create main pipeline
 main_pipeline = Gst.Pipeline.new("main_pipeline")
-
-# Create compositor
 compositor = Gst.ElementFactory.make("compositor", "compositor")
-compositor.set_property("background", 1)  # Black background
+compositor.set_property("background", 1)
 
-# Create video sink
 if is_desktop_environment():
     print("Desktop environment detected - using autovideosink")
     videosink = Gst.ElementFactory.make("autovideosink", "videosink")
-    print("Note: Press F11 for fullscreen in desktop mode")
+    print("Note: Press F11 for fullscreen")
 else:
-    print("Console mode detected - using kmssink for fullscreen")
+    print("Console mode detected - using kmssink")
     videosink = Gst.ElementFactory.make("kmssink", "videosink")
     if videosink:
         print("kmssink loaded successfully")
@@ -144,39 +154,30 @@ else:
         except:
             pass
     else:
-        print("WARNING: kmssink not available, falling back to autovideosink")
+        print("WARNING: kmssink not available, using autovideosink")
         videosink = Gst.ElementFactory.make("autovideosink", "videosink")
 
-# Add elements to pipeline
 main_pipeline.add(compositor)
 main_pipeline.add(videosink)
-
-# Link compositor to videosink
 compositor.link(videosink)
 
-# Get bus for message handling
 bus = main_pipeline.get_bus()
 bus.add_signal_watch()
 
 def calculate_layout(num_videos):
-    """
-    Calculate positions and sizes for videos based on count.
-    Returns list of (x, y, width, height) in pixels for 1920x1080 output.
-    """
+    """Calculate positions for videos"""
     width = 1920
     height = 1080
     
     if num_videos == 1:
         return [(0, 0, width, height)]
     elif num_videos == 2:
-        # Side by side
         half_width = width // 2
         return [
             (0, 0, half_width, height),
             (half_width, 0, half_width, height)
         ]
     elif num_videos == 3:
-        # One on left, two stacked on right
         half_width = width // 2
         half_height = height // 2
         return [
@@ -185,7 +186,6 @@ def calculate_layout(num_videos):
             (half_width, half_height, half_width, half_height)
         ]
     elif num_videos == 4:
-        # 2x2 grid
         half_width = width // 2
         half_height = height // 2
         return [
@@ -197,7 +197,7 @@ def calculate_layout(num_videos):
     return []
 
 def update_layout():
-    """Update the position and size of all active video pads in the compositor"""
+    """Update the position and size of all active video pads"""
     num_videos = len(active_videos)
     if num_videos == 0:
         return
@@ -211,7 +211,6 @@ def update_layout():
         x, y, w, h = layout[idx]
         pad = video.compositor_pad
         
-        # Set pad properties for position and size
         pad.set_property("xpos", x)
         pad.set_property("ypos", y)
         pad.set_property("width", w)
@@ -219,48 +218,42 @@ def update_layout():
         
         print(f"  Video {idx} '{video.clip['name']}' -> pos({x},{y}) size({w}x{h})")
 
-def start_clip_playback(clip, start_ns, end_ns):
+def create_ram_pipeline(clip):
     """
-    Create a video pipeline for a clip and return elements needed.
-    Returns (bin, src_pad) where bin is the decoder bin and src_pad connects to compositor.
+    Create a pipeline that plays from RAM using appsrc.
+    Since clips are pre-extracted, we just play from start to end.
     """
-    # Create a bin for this clip's pipeline
-    clip_bin = Gst.Bin.new(f"clip_bin_{id(clip)}")
+    pipeline = Gst.Pipeline.new(f"pipeline_{id(clip)}")
     
-    # Use uridecodebin for efficient decoding
-    uridecodebin = Gst.ElementFactory.make("uridecodebin", f"decode_{id(clip)}")
-    uridecodebin.set_property("uri", clip['file_path'])
+    # Create appsrc - feeds data from RAM
+    appsrc = Gst.ElementFactory.make("appsrc", "appsrc")
+    appsrc.set_property("format", Gst.Format.TIME)
+    appsrc.set_property("is-live", True)
+    appsrc.set_property("block", False)
     
-    # Add queue for buffering
-    queue = Gst.ElementFactory.make("queue", f"queue_{id(clip)}")
-    queue.set_property("max-size-buffers", 3)  # Keep buffer small
+    # Create decoder pipeline
+    decodebin = Gst.ElementFactory.make("decodebin", "decodebin")
+    queue = Gst.ElementFactory.make("queue", "queue")
+    videoconvert = Gst.ElementFactory.make("videoconvert", "videoconvert")
+    videoscale = Gst.ElementFactory.make("videoscale", "videoscale")
+    sink = Gst.ElementFactory.make("intervideosink", "intervideosink")
+    sink.set_property("channel", f"channel_{id(clip)}")
     
-    # Add videoconvert and videoscale for format conversion
-    videoconvert = Gst.ElementFactory.make("videoconvert", f"convert_{id(clip)}")
-    videoscale = Gst.ElementFactory.make("videoscale", f"scale_{id(clip)}")
-    videorate = Gst.ElementFactory.make("videorate", f"rate_{id(clip)}")
-    videorate.set_property("drop-only", True)  # Only drop frames, don't duplicate
+    pipeline.add(appsrc)
+    pipeline.add(decodebin)
+    pipeline.add(queue)
+    pipeline.add(videoconvert)
+    pipeline.add(videoscale)
+    pipeline.add(sink)
     
-    # Add elements to bin
-    clip_bin.add(uridecodebin)
-    clip_bin.add(queue)
-    clip_bin.add(videoconvert)
-    clip_bin.add(videoscale)
-    clip_bin.add(videorate)
-    
-    # Link the chain (will link uridecodebin dynamically via pad-added)
+    # Link static elements
+    appsrc.link(decodebin)
     queue.link(videoconvert)
     videoconvert.link(videoscale)
-    videoscale.link(videorate)
+    videoscale.link(sink)
     
-    # Create ghost pad for output
-    src_pad = videorate.get_static_pad("src")
-    ghost_pad = Gst.GhostPad.new("src", src_pad)
-    clip_bin.add_pad(ghost_pad)
-    
-    # Handle dynamic pad from uridecodebin
+    # Handle dynamic pad from decodebin
     def on_pad_added(element, pad):
-        # Only link video pads
         caps = pad.get_current_caps()
         if caps:
             structure = caps.get_structure(0)
@@ -269,109 +262,86 @@ def start_clip_playback(clip, start_ns, end_ns):
                 if not sink_pad.is_linked():
                     pad.link(sink_pad)
     
-    uridecodebin.connect("pad-added", on_pad_added)
+    decodebin.connect("pad-added", on_pad_added)
     
-    # Add bin to main pipeline
-    main_pipeline.add(clip_bin)
+    # Feed data from RAM
+    file_data = clip['file_data']
+    chunk_size = 4096
+    offset = 0
     
-    # Set to PAUSED and wait
-    clip_bin.set_state(Gst.State.PAUSED)
-    ret, state, pending = clip_bin.get_state(5 * Gst.SECOND)
+    def need_data(src, length):
+        nonlocal offset
+        if offset < len(file_data):
+            chunk = file_data[offset:offset + chunk_size]
+            buf = Gst.Buffer.new_wrapped(chunk)
+            src.emit("push-buffer", buf)
+            offset += len(chunk)
+        else:
+            # Loop: reset to beginning
+            offset = 0
+            if clip.get('end_sec', -1) != -1:  # Only loop if not playing to end
+                chunk = file_data[offset:offset + chunk_size]
+                buf = Gst.Buffer.new_wrapped(chunk)
+                src.emit("push-buffer", buf)
+                offset += len(chunk)
+            else:
+                src.emit("end-of-stream")
     
-    if ret == Gst.StateChangeReturn.FAILURE:
-        print(f"ERROR: Failed to pause decoder for clip '{clip['name']}'")
-        main_pipeline.remove(clip_bin)
-        return None, None
+    appsrc.connect("need-data", need_data)
     
-    # Seek to start position
-    success = clip_bin.seek_simple(
-        Gst.Format.TIME,
-        Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-        start_ns
-    )
-    
-    if not success:
-        print(f"WARNING: Seek failed for clip '{clip['name']}'")
-    
-    # Set to PLAYING
-    clip_bin.set_state(Gst.State.PLAYING)
-    
-    return clip_bin, ghost_pad
+    return pipeline, appsrc
 
 def add_video(clip, midi_key):
-    """
-    Add a new video to the compositor.
-    If at max capacity, remove the oldest video first.
-    """
+    """Add a new video to the compositor"""
     global active_videos
     
     print(f"\n=== add_video: '{clip['name']}' (key={midi_key}) ===")
     
-    # Check if this exact clip is already playing (for exclusive clips)
     if clip.get('exclusive', False) and midi_key in active_videos:
         print(f"  Clip is exclusive and already playing - ignoring")
         return
     
-    # If at capacity, remove oldest video
     if len(active_videos) >= MAX_SIMULTANEOUS_VIDEOS:
         oldest_key = next(iter(active_videos))
-        print(f"  At capacity ({MAX_SIMULTANEOUS_VIDEOS}), removing oldest: {oldest_key}")
+        print(f"  At capacity, removing oldest: {oldest_key}")
         remove_video(oldest_key)
     
-    # Calculate timing
-    start_ns = int(clip['start_sec'] * Gst.SECOND)
-    end_sec = clip.get('end_sec', -1)
-    end_ns = int(end_sec * Gst.SECOND) if end_sec >= 0 else -1
+    # Create RAM-based pipeline
+    pipeline, appsrc = create_ram_pipeline(clip)
     
-    # Create decoder bin
-    clip_bin, src_pad = start_clip_playback(clip, start_ns, end_ns)
-    if clip_bin is None:
-        print("  Failed to create decoder")
-        return
+    # Create intervideosrc
+    intervideosrc = Gst.ElementFactory.make("intervideosrc", f"src_{id(clip)}")
+    intervideosrc.set_property("channel", f"channel_{id(clip)}")
     
-    # Request a new sink pad from compositor
-    compositor_pad = compositor.get_request_pad("sink_%u")
+    main_pipeline.add(intervideosrc)
     
-    # Set compositor pad properties to ensure visibility
-    compositor_pad.set_property("alpha", 1.0)  # Fully opaque
-    compositor_pad.set_property("zorder", len(active_videos))  # Stack order
+    # Get compositor pad
+    compositor_pad = compositor.request_pad_simple("sink_%u")
     
-    # Link source pad to compositor pad
+    # Link to compositor
+    src_pad = intervideosrc.get_static_pad("src")
     src_pad.link(compositor_pad)
     
-    # Set up loop timer if needed
-    loop_timer_id = None
-    if end_ns >= 0:
-        def check_loop():
-            success_pos, pos = clip_bin.query_position(Gst.Format.TIME)
-            if success_pos and pos >= end_ns:
-                clip_bin.seek_simple(
-                    Gst.Format.TIME,
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                    start_ns
-                )
-            return True
-        
-        loop_timer_id = GLib.timeout_add(100, check_loop)
+    intervideosrc.sync_state_with_parent()
+    
+    # Start the pipeline
+    pipeline.set_state(Gst.State.PLAYING)
     
     # Create ActiveVideo object
     active_video = ActiveVideo(
         clip=clip,
-        pipeline=clip_bin,
+        pipeline=pipeline,
         compositor_pad=compositor_pad,
-        loop_timer_id=loop_timer_id,
+        appsrc=appsrc,
+        loop_timer_id=None,
         midi_key=midi_key,
         start_time=time.time()
     )
     
-    # Add to active videos
     active_videos[midi_key] = active_video
     
     print(f"  Added video. Total active: {len(active_videos)}")
-    
-    # Update layout
     update_layout()
-    
     print("=== add_video complete ===\n")
 
 def remove_video(midi_key):
@@ -379,38 +349,31 @@ def remove_video(midi_key):
     global active_videos
     
     if midi_key not in active_videos:
-        print(f"remove_video: key {midi_key} not found in active videos")
         return
     
     print(f"\n=== remove_video: key={midi_key} ===")
     
     video = active_videos[midi_key]
     
-    # Stop loop timer if exists
-    if video.loop_timer_id is not None:
-        GLib.source_remove(video.loop_timer_id)
+    # Stop pipeline
+    video.pipeline.set_state(Gst.State.NULL)
     
-    # Unlink from compositor
-    clip_bin = video.pipeline
-    src_pad = clip_bin.get_static_pad("src")
-    if src_pad:
+    # Remove intervideosrc
+    intervideosrc = main_pipeline.get_by_name(f"src_{id(video.clip)}")
+    if intervideosrc:
+        src_pad = intervideosrc.get_static_pad("src")
         peer_pad = src_pad.get_peer()
         if peer_pad:
             src_pad.unlink(peer_pad)
             compositor.release_request_pad(peer_pad)
+        
+        intervideosrc.set_state(Gst.State.NULL)
+        main_pipeline.remove(intervideosrc)
     
-    # Stop and remove the bin
-    clip_bin.set_state(Gst.State.NULL)
-    main_pipeline.remove(clip_bin)
-    
-    # Remove from active videos
     del active_videos[midi_key]
     
     print(f"  Removed video. Total active: {len(active_videos)}")
-    
-    # Update layout for remaining videos
     update_layout()
-    
     print("=== remove_video complete ===\n")
 
 def on_bus_message(bus, message):
@@ -423,8 +386,6 @@ def on_bus_message(bus, message):
     elif t == Gst.MessageType.WARNING:
         err, debug = message.parse_warning()
         print(f"BUS WARNING: {err}")
-    elif t == Gst.MessageType.EOS:
-        print("BUS: End of stream")
     elif t == Gst.MessageType.STATE_CHANGED:
         if message.src == main_pipeline:
             old, new, pending = message.parse_state_changed()
@@ -454,8 +415,7 @@ for i, name in enumerate(inputs):
 
 PORT_NAME = next((name for name in inputs if "Deluge MIDI 1" in name), None)
 if PORT_NAME is None:
-    print("WARNING: No Deluge MIDI input found! MIDI control will not work.")
-    print("Available inputs:", inputs)
+    print("WARNING: No Deluge MIDI input found!")
     PORT_NAME = None
 else:
     print(f"Opening MIDI input: {PORT_NAME}")
@@ -476,26 +436,18 @@ def midi_reader(port_name):
 
 def find_clip_for_midi(channel, note):
     """Find the appropriate clip for a MIDI channel/note combination"""
-    # Check specific (channel, note) mapping first
     if (channel, note) in midi_map:
         return midi_map[(channel, note)]
-    
-    # Check any-channel for this note
     if 'any_channel' in midi_map and note in midi_map['any_channel']:
         return midi_map['any_channel'][note]
-    
-    # Check any-note for this channel
     if 'any_note' in midi_map and channel in midi_map['any_note']:
         return midi_map['any_note'][channel]
-    
-    # Check any-any
     if 'any_any' in midi_map:
         return midi_map['any_any']
-    
     return None
 
 def process_midi_messages():
-    """Process MIDI messages from the queue (called by GLib timer)"""
+    """Process MIDI messages from the queue"""
     try:
         while True:
             try:
@@ -503,7 +455,6 @@ def process_midi_messages():
             except queue.Empty:
                 break
             
-            # Process note_on messages with velocity > 0
             if msg.type == 'note_on' and msg.velocity > 0:
                 print(f"\nMIDI NOTE_ON: ch={msg.channel} note={msg.note} vel={msg.velocity}")
                 
@@ -513,18 +464,15 @@ def process_midi_messages():
                     midi_key = (msg.channel, msg.note)
                     add_video(clip, midi_key)
                 else:
-                    print(f"  → No clip mapped to ch={msg.channel} note={msg.note}")
+                    print(f"  → No clip mapped")
             
-            # Process note_off messages (or note_on with velocity 0)
             elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
                 print(f"\nMIDI NOTE_OFF: ch={msg.channel} note={msg.note}")
                 midi_key = (msg.channel, msg.note)
                 
                 if midi_key in active_videos:
-                    print(f"  → Stopping video for ch={msg.channel} note={msg.note}")
+                    print(f"  → Stopping video")
                     remove_video(midi_key)
-                else:
-                    print(f"  → No active video for ch={msg.channel} note={msg.note}")
                     
     except Exception as e:
         print(f"Error processing MIDI: {e}")
@@ -533,7 +481,6 @@ def process_midi_messages():
     
     return True
 
-# Start MIDI reader thread if port available
 if PORT_NAME:
     reader_thread = threading.Thread(
         target=midi_reader,
@@ -542,19 +489,17 @@ if PORT_NAME:
     )
     reader_thread.start()
     print("MIDI listening started")
-    
-    # Install GLib timer to check MIDI queue
     GLib.timeout_add(10, process_midi_messages)
 else:
-    print("MIDI listening skipped (no input found)")
+    print("MIDI listening skipped")
 
 print("=== MIDI Setup Complete ===\n")
 
 # -------------------------------
-# Keyboard Input Handler (Debug)
+# Keyboard Input Handler
 # -------------------------------
 def getch():
-    """Get a single character from stdin without waiting for Enter"""
+    """Get a single character from stdin"""
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
@@ -567,13 +512,12 @@ def getch():
 running = True
 
 def shutdown():
-    """Clean shutdown function"""
+    """Clean shutdown"""
     global running, loop
     print("\nShutting down...")
     running = False
     stop_event.set()
     
-    # Stop all active videos
     for key in list(active_videos.keys()):
         remove_video(key)
     
@@ -582,10 +526,9 @@ def shutdown():
         loop.quit()
 
 def keyboard_thread():
-    """Thread to handle keyboard input for debugging"""
+    """Handle keyboard input"""
     global running
     print("\n=== Keyboard control active ===")
-    print("Press keys to trigger clips (see clips.json for debug_keypress mappings)")
     print("Available keys:", ", ".join(sorted(keypress_map.keys())))
     print("Press 'q' to quit or Ctrl+C\n")
     
@@ -593,12 +536,7 @@ def keyboard_thread():
         try:
             key = getch()
             
-            if ord(key) == 3:  # Ctrl+C
-                print("\n^C detected")
-                GLib.idle_add(shutdown)
-                break
-            
-            if key == 'q':
+            if ord(key) == 3 or key == 'q':
                 print("\nQuitting...")
                 GLib.idle_add(shutdown)
                 break
@@ -606,7 +544,6 @@ def keyboard_thread():
             if key in keypress_map:
                 clip = keypress_map[key]
                 print(f"\nKey '{key}' pressed → triggering clip '{clip['name']}'")
-                # Use a fake MIDI key for keyboard triggers
                 midi_key = ('keyboard', ord(key))
                 GLib.idle_add(add_video, clip, midi_key)
             elif key.isprintable():
@@ -618,20 +555,14 @@ def keyboard_thread():
             break
 
 def signal_handler(sig, frame):
-    """Handle SIGINT (Ctrl+C) from terminal"""
+    """Handle SIGINT (Ctrl+C)"""
     print("\n^C signal received")
     shutdown()
     sys.exit(0)
 
-# Use Unix signal handling that works with GLib
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# Also set up GLib unix signal handling for better integration
-GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, lambda: shutdown() or False)
-GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: shutdown() or False)
-
-# Start keyboard input thread
 kbd_thread = threading.Thread(target=keyboard_thread, daemon=True)
 kbd_thread.start()
 
@@ -639,7 +570,7 @@ kbd_thread.start()
 # Start GLib Main Loop
 # -------------------------------
 print("=== Starting main loop ===")
-print("System ready! Waiting for MIDI input or keyboard commands...\n")
+print("System ready! All clips in RAM - zero latency!\n")
 
 loop = GLib.MainLoop()
 
