@@ -44,6 +44,7 @@ A Python-based visualizer that plays video clips in response to MIDI input. Desi
 	"source":"some_web_path.zip"
   }
 ]
+```
 
 ## Concerning chords
 Note that MIDI is an inherently serial format. As such, chords are actually transmitted as sequential notes.  This may cause odd or unexpected behavior if you have multiple notes of a chord set for clips on the same channel. 
