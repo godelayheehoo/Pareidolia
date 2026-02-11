@@ -48,6 +48,7 @@ A Python-based visualizer that plays video clips in response to MIDI input. Desi
 
 ## Concerning chords
 Note that MIDI is an inherently serial format. As such, chords are actually transmitted as sequential notes.  This may cause odd or unexpected behavior if you have multiple notes of a chord set for clips on the same channel. 
+Proper chord support is a TODO.
 
 ## Getting videos
 A `clip_download_helper.py` script is included to download the clips listed in `clips.json`.  Current it only supports .zip and single-video file web resources. When run, it will look for all the specified
@@ -58,3 +59,38 @@ A useful place to get clips in the internet archive is at https://archive.org/de
 
 ## Running the program
 This can be run directrly from the rpi in console GUI mode.  It behaves slightly better if run from terminal mode though, you can switch between modes using `sudo raspi-config`
+
+## Stopping the Flask Video Mapper
+
+The Flask app runs your video script as a subprocess. Once GStreamer starts playing videos, Ctrl+C may not work reliably due to GLib's signal handling. Here are three ways to stop both Flask and the video process:
+
+### Method 1: Web Interface Shutdown Button (Recommended)
+The easiest method when controlling from your phone:
+
+1. Open the web interface at `http://<your-pi-ip>:5000`
+2. Click the red **🛑 Shutdown** button at the bottom
+3. Confirm when prompted
+4. Both Flask and the video process will stop cleanly
+
+### Method 2: Kill File Trigger
+From another terminal (SSH or Ctrl+Alt+F2 to switch TTY):
+
+```bash
+cd /path/to/your/project
+touch STOP_SERVER
+```
+
+The server checks for this file every second and will exit automatically when detected.
+
+### Method 3: Emergency Kill
+If nothing else works, force-kill the processes:
+
+```bash
+# Kill just the Flask app
+pkill -f flask_app_fixed.py
+
+# Or kill all Python processes (nuclear option)
+sudo pkill python3
+```
+
+**Note:** Ctrl+C should work when you first start the server and before any videos play. It's only after GStreamer's main loop starts that signal handling becomes unreliable.
