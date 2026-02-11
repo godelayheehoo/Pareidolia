@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template_string, redirect, send_from_directory
-import json, os, subprocess, signal, sys, atexit
+import json, os, subprocess, signal, sys, atexit, time
 
 app = Flask(__name__)
 
@@ -7,6 +7,7 @@ CLIPS_FILE = "./processed_clips.json"
 VIDEO_SCRIPT = "./pareidolia_no_ram.py"
 VIDEO_FOLDER = "./processed_clips"
 THUMB_FOLDER = "./thumbnails"
+KILL_FILE = "./STOP_SERVER"  # Touch this file to stop the server
 os.makedirs(THUMB_FOLDER, exist_ok=True)
 
 video_process = None
@@ -59,13 +60,40 @@ def save_clips(clips):
 def start_video_process():
     """Start the video process with proper process group handling"""
     global video_process
+    
+    # Validate JSON before starting
     try:
+        clips = load_clips()
+        if not clips:
+            print("⚠ Warning: No clips in JSON - video process may not start correctly")
+    except Exception as e:
+        print(f"⚠ Warning: Error reading clips JSON: {e}")
+    
+    try:
+        # Ensure video process inherits environment (especially DISPLAY)
+        env = os.environ.copy()
+        
         video_process = subprocess.Popen(
             ["python3", VIDEO_SCRIPT],
-            preexec_fn=os.setsid  # Create new process group for better control
+            preexec_fn=os.setsid,  # Create new process group for better control
+            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            env=env  # Pass full environment including DISPLAY
         )
         print(f"✓ Video process started (PID: {video_process.pid})")
-        return video_process
+        
+        # Monitor for immediate crashes
+        try:
+            return_code = video_process.wait(timeout=2)
+            print(f"⚠ Video process exited immediately with code {return_code}")
+            # Try to get error output
+            stderr = video_process.stderr.read().decode() if video_process.stderr else ""
+            if stderr:
+                print(f"Error output: {stderr[:500]}")
+            return None
+        except subprocess.TimeoutExpired:
+            # Good - it's still running
+            return video_process
     except Exception as e:
         print(f"⚠ Failed to start video process: {e}")
         return None
@@ -119,6 +147,22 @@ def generate_thumbnail(clip):
 def serve_thumbnail(filename):
     return send_from_directory(THUMB_FOLDER, filename)
 
+@app.route("/shutdown", methods=["POST"])
+def shutdown_server():
+    """Shutdown endpoint to stop both Flask and video process"""
+    print("\n🛑 Shutdown requested from web interface")
+    cleanup()
+    
+    # Shutdown Flask
+    func = request.environ.get('werkzeug.server.shutdown')
+    if func is None:
+        # Alternative method for newer Werkzeug versions
+        import sys
+        print("👋 Exiting...")
+        sys.exit(0)
+    func()
+    return "Server shutting down..."
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     clip_files = get_clip_files()
@@ -128,24 +172,42 @@ def index():
         new_clips = []
         rows = int(request.form.get("rows", 0))
         for i in range(rows):
+            name = request.form.get(f"name_{i}")
+            if not name:
+                continue
+            
+            # Find the original clip to preserve all fields
+            original_clip = next((c for c in clips if c["name"] == name), None)
+            if not original_clip:
+                continue
+            
+            # Get form values
             channel = request.form.get(f"channel_{i}")
             note = request.form.get(f"note_{i}")
-            filename = request.form.get(f"clip_{i}")
-            name = request.form.get(f"name_{i}")
             desc = request.form.get(f"desc_{i}")
-            file_path = next((c["file_path"] for c in clips if c["name"] == name), "")
-            if channel is not None and note and filename:
-                new_clips.append({
-                    "name": name,
-                    "midi_channel": int(channel),
-                    "midi_note": note,
-                    "file_path": file_path,
-                    "comments": desc
-                })
+            
+            # Start with original clip data to preserve all fields
+            new_clip = original_clip.copy()
+            
+            # Update only the fields from the form
+            if channel is not None:
+                new_clip["midi_channel"] = int(channel)
+            if note:
+                new_clip["midi_note"] = note
+            if desc:
+                new_clip["comments"] = desc
+            
+            new_clips.append(new_clip)
+        
         save_clips(new_clips)
-
-        # restart video script
-        restart_video_process()
+        
+        # Only restart if we actually saved clips
+        if new_clips:
+            print(f"✓ Saved {len(new_clips)} clips")
+            restart_video_process()
+        else:
+            print("⚠ No clips to save - keeping video process running")
+        
         return redirect("/")
 
     # generate thumbnails for all clips
@@ -186,13 +248,17 @@ def index():
             </select>
         </td>
         <td><input type="text" name="note_{{i}}" value="{{clip.get('midi_note','')}}"></td>
-        <td>{{clip.get('comments','')}}</td>
+        <td><input type="text" name="desc_{{i}}" value="{{clip.get('comments','')}}"></td>
         <input type="hidden" name="name_{{i}}" value="{{clip['name']}}">
         </tr>
         {% endfor %}
     </table>
     <input type="hidden" name="rows" value="{{clips|length}}">
     <button type="submit">💾 Save & Restart</button>
+    </form>
+    <br>
+    <form method="POST" action="/shutdown" style="display: inline;">
+    <button type="submit" style="background-color: #f44336;" onclick="return confirm('Stop both Flask and video process?')">🛑 Shutdown</button>
     </form>
     </body>
     </html>
@@ -204,6 +270,10 @@ if __name__ == "__main__":
     print("🎬 Video Clip MIDI Mapper")
     print("=" * 50)
     
+    # Remove kill file if it exists
+    if os.path.exists(KILL_FILE):
+        os.remove(KILL_FILE)
+    
     # Start the video process
     start_video_process()
     
@@ -211,7 +281,22 @@ if __name__ == "__main__":
     print("💡 Get your Pi's IP with: hostname -I")
     print("🌐 Access at: http://<your-pi-ip>:5000")
     print("\n⚠️  Press Ctrl+C to stop both Flask and video process")
+    print("⚠️  Or create file './STOP_SERVER' to trigger shutdown")
+    print("⚠️  Or use the 🛑 Shutdown button in web interface")
     print("=" * 50 + "\n")
+    
+    # Check for kill file periodically
+    import threading
+    def check_kill_file():
+        while True:
+            if os.path.exists(KILL_FILE):
+                print("\n🛑 Kill file detected!")
+                cleanup()
+                os._exit(0)
+            time.sleep(1)
+    
+    kill_thread = threading.Thread(target=check_kill_file, daemon=True)
+    kill_thread.start()
     
     try:
         app.run(host="0.0.0.0", port=5000)

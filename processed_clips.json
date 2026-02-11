@@ -31,9 +31,9 @@
     },
     {
       "name": "dog_and_cat_singing",
-      "file_path": "processed_clips/dog_and_cat_singing_5c4a29a8.mp4",
+      "file_path": "processed_clips/dog_and_cat_singing_02df515c.mp4",
       "start_sec": 0,
-      "end_sec": 38.0,
+      "end_sec": 28.0,
       "midi_channel": -1,
       "midi_note": "D3",
       "debug_keypress": "l",
@@ -41,7 +41,7 @@
       "source": "https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
       "original_file": "videos/1946.02.22 - Cheese Burglar.mp4",
       "original_start": 37.0,
-      "original_end": 75.0
+      "original_end": 65.0
     },
     {
       "name": "swordfish_swimming",

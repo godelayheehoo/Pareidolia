@@ -27,7 +27,7 @@
       "name": "dog_and_cat_singing",
       "file_path": "./videos/1946.02.22 - Cheese Burglar.mp4",
       "start_sec": 37.0,
-      "end_sec": 75.0,
+      "end_sec": 65.0,
       "midi_channel": -1,
       "midi_note": "D3",
       "debug_keypress":"l",
