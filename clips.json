@@ -63,6 +63,74 @@
 		"midi_note":"F2",
 		"debug_keypress":"f",
 		"source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip"
-	}
+	},
+  {"name":"butterfly_then_car",
+   "file_path":"./videos/1946.10.18 - Spree For All.mp4",
+   "start_sec":35.0,
+   "end_sec":60.0,
+   "midi_channel":-1,
+   "midi_note":"E2",
+   "debug_keypress":"d",
+   "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+   "comments":"I could be wrong about where this is from"
+  },
+  {
+   "name":"wake_up_look_out_window",
+   "file_path":"./videos/1946.03 - Brotherhood of Man.mp4",
+   "start_sec":71.0,
+    "end_sec":103.0,
+    "midi_channel":-1,
+    "midi_note":"D2",
+    "debug_keypress":"s",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"I could be wrong about where this is from"
+  },
+    {
+   "name":"run_out_house",
+   "file_path":"./videos/1946.03 - Brotherhood of Man.mp4",
+   "start_sec":117.0,
+    "end_sec":132.0,
+    "midi_channel":-1,
+    "midi_note":"A5",
+    "debug_keypress":"s",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"I could be wrong about where this is from"
+  },
+  {"name":"equations",
+  "file_path":"./videos/1946 - One World or None.mp4",
+  "start_sec":87.0,
+  "end_sec":121.0,
+  "midi_channel":-1,
+  "midi_note":"C0",
+  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+  "comments":"source may be wrong"
+  },
+  {"name":"nuclei",
+  "file_path":"./videos/1946 - One World or None.mp4",
+  "start_sec":134.0,
+  "end_sec":149.0,
+  "midi_channel":-1,
+  "midi_note":"A0",
+  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+  "comments":"source may be wrong"
+  },
+  {"name":"destroyed_city",
+  "file_path":"./videos/1946 - One World or None.mp4",
+  "start_sec":157.0,
+  "end_sec":170.0,
+  "midi_channel":-1,
+  "midi_note":"B0",
+  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+  "comments":"source may be wrong"
+  },
+  {"name":"skull_cross_circle",
+  "file_path":"./videos/1946 - One World or None.mp4",
+  "start_sec":181.0,
+  "end_sec":210.0,
+  "midi_channel":-1,
+  "midi_note":"D0",
+  "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+  "comments":"source may be wrong"
+  }
   ]
 }
