@@ -55,10 +55,12 @@ def extract_clip(source_file, start_sec, end_sec, output_file):
     print(f"    Time: {start_sec}s to {end_sec if end_sec >= 0 else 'end'}s")
     
     # Build ffmpeg command
+    # IMPORTANT: -i BEFORE -ss for accurate seeking, then re-encode
     cmd = [
         "ffmpeg",
         "-y",  # Overwrite output file
-        "-ss", str(start_sec),  # Start time
+        "-i", str(source_file),  # Input file FIRST
+        "-ss", str(start_sec),  # Start time AFTER input for accurate seeking
     ]
     
     # Add duration if end_sec is specified
@@ -67,7 +69,6 @@ def extract_clip(source_file, start_sec, end_sec, output_file):
         cmd.extend(["-t", str(duration)])
     
     cmd.extend([
-        "-i", str(source_file),  # Input file
         "-vf", f"scale={SCALE},fps={FRAMERATE}",  # Scale down and limit framerate
         "-c:v", "libx264",  # H.264 codec (Pi hardware can decode this)
         "-preset", PRESET,  # Fast encoding
@@ -75,6 +76,8 @@ def extract_clip(source_file, start_sec, end_sec, output_file):
         "-c:a", "aac",  # Audio codec
         "-b:a", "96k",  # Lower audio bitrate
         "-avoid_negative_ts", "make_zero",  # Fix timestamp issues
+        "-reset_timestamps", "1",  # Reset timestamps to start at 0
+        "-fflags", "+genpts",  # Generate presentation timestamps
         str(output_file)
     ])
     
