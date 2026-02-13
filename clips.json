@@ -168,6 +168,18 @@
     "midi_note":"A0",
     "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
     "comments":"source may be wrong"
+  },
+  {"name":"scrubbing_deck",
+    "file_path":"./videos/1946 - Seaman Tarfu.mp4",
+    "start_sec":134.5,
+    "end_sec":149.0,
+    "midi_channel":4,
+    "midi_note":"B0",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"source may be wrong"
+  },
+  {
+    
   }
-  ]
+ ]
 }
