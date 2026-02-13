@@ -26,7 +26,7 @@ from tools import note_to_midi
 # -------------------------------
 # Configuration
 # -------------------------------
-MAX_SIMULTANEOUS_VIDEOS = 4
+MAX_SIMULTANEOUS_VIDEOS = 6
 
 # -------------------------------
 # Load Clips Configuration

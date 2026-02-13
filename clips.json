@@ -179,7 +179,14 @@
     "comments":"source may be wrong"
   },
   {
-    
+    "name":"flying_seagull",
+    "file_path":"./videos/1946 - Seaman Tarfu.mp4",
+    "start_sec":230.7,
+    "end_sec":234.2,
+    "midi_channel":4,
+    "midi_note":"C1",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"source may be wrong"
   }
  ]
 }
