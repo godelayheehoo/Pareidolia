@@ -4,7 +4,7 @@ import json, os, subprocess, signal, sys, atexit, time, psutil
 app = Flask(__name__)
 
 CLIPS_FILE = "./processed_clips.json"
-VIDEO_SCRIPT = "./pareidolia_with_resume.py"
+VIDEO_SCRIPT = "./pareidolia_with_no_ram.py"
 VIDEO_FOLDER = "./processed_clips"
 THUMB_FOLDER = "./thumbnails"
 KILL_FILE = "./STOP_SERVER"  # Touch this file to stop the server
