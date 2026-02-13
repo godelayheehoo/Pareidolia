@@ -100,7 +100,7 @@ def extract_clip(source_file, start_sec, end_sec, output_file):
         print(f"    ✗ Error: ffmpeg not found. Please install ffmpeg.")
         return False
 
-def process_clips():
+def process_clips(force=False):
     """Main processing function"""
     print("=" * 60)
     print("Video Clip Processor for Raspberry Pi")
@@ -141,7 +141,7 @@ def process_clips():
         output_filename = generate_clip_filename(clip)
         output_path = PROCESSED_DIR / output_filename
 
-        if output_path.exists() and not args.force:
+        if output_path.exists() and not force:
             print(f"  ✓ Skipping (already exists): {output_filename}")
             success_count += 1
             continue
@@ -279,6 +279,7 @@ def main():
     )
     parser.add_argument(
         '--force',
+        default=False,
         action='store_true',
         help='Force reprocessing of all clips'
     )
@@ -291,7 +292,7 @@ def main():
         cleanup_orphaned()
     else:
         # Normal processing
-        success = process_clips()
+        success = process_clips(force=args.force)
         sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
