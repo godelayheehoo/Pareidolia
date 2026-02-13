@@ -140,6 +140,11 @@ def process_clips():
         # Generate output filename
         output_filename = generate_clip_filename(clip)
         output_path = PROCESSED_DIR / output_filename
+
+        if output_path.exists() and not args.force:
+            print(f"  ✓ Skipping (already exists): {output_filename}")
+            success_count += 1
+            continue
         
         # Extract clip
         start_sec = clip['start_sec']
@@ -271,6 +276,11 @@ def main():
         '--cleanup-all',
         action='store_true',
         help='Remove ALL processed clips and processed_clips.json'
+    )
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Force reprocessing of all clips'
     )
     
     args = parser.parse_args()
