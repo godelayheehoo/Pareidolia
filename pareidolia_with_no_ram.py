@@ -203,13 +203,18 @@ def update_layout():
         
         print(f"  Video {idx} '{video.clip['name']}' -> pos({x},{y}) size({w}x{h})")
 
-def start_clip_playback(clip, start_position=0):
+def start_clip_playback(clip, start_position=0, midi_key=None):
     """
     Create playbin for a pre-processed clip.
     Optionally seeks to start_position if > 0.
+    Sets up automatic looping when clip reaches end.
     """
     playbin = Gst.ElementFactory.make("playbin", f"player_{id(clip)}")
     playbin.set_property("uri", clip['file_path'])
+    
+    # Store midi_key on the playbin for EOS handling
+    playbin.midi_key = midi_key
+    playbin.clip = clip
     
     # Create video output bin
     videobin = Gst.Bin.new(f"videobin_{id(clip)}")
@@ -232,6 +237,11 @@ def start_clip_playback(clip, start_position=0):
     
     playbin.set_property("video-sink", videobin)
     
+    # Set up bus message watching for EOS
+    bus = playbin.get_bus()
+    bus.add_signal_watch()
+    bus.connect("message", on_playbin_message)
+    
     # Set to PAUSED first for seeking
     playbin.set_state(Gst.State.PAUSED)
     
@@ -252,6 +262,44 @@ def start_clip_playback(clip, start_position=0):
     playbin.set_state(Gst.State.PLAYING)
     
     return playbin
+
+def on_playbin_message(bus, message):
+    """Handle messages from individual playbins (for looping)"""
+    t = message.type
+    
+    if t == Gst.MessageType.EOS:
+        # Clip reached the end - loop it!
+        playbin = message.src
+        if hasattr(playbin, 'midi_key') and hasattr(playbin, 'clip'):
+            midi_key = playbin.midi_key
+            clip = playbin.clip
+            
+            if midi_key and midi_key in active_videos:
+                print(f"  Clip '{clip['name']}' reached end - looping!")
+                
+                # Reset the playback position for this clip
+                file_path = clip['file_path']
+                if file_path in clip_playback_data:
+                    clip_playback_data[file_path]['position'] = 0
+                
+                # Restart from beginning
+                GLib.idle_add(lambda: restart_clip_at_end(midi_key, clip))
+    
+    elif t == Gst.MessageType.ERROR:
+        err, debug = message.parse_error()
+        playbin = message.src
+        if hasattr(playbin, 'clip'):
+            print(f"Playbin ERROR for '{playbin.clip['name']}': {err}")
+    
+    return True
+
+def restart_clip_at_end(midi_key, clip):
+    """Restart a clip that has reached its natural end"""
+    if midi_key in active_videos:
+        # Remove and re-add to loop
+        remove_video(midi_key)
+        add_video(clip, midi_key)
+    return False
 
 def add_video(clip, midi_key):
     """Add a new video to the compositor"""
@@ -287,7 +335,7 @@ def add_video(clip, midi_key):
         clip_playback_data[file_path] = {'position': 0}
     
     # Create playbin with optional seek
-    playbin = start_clip_playback(clip, start_position)
+    playbin = start_clip_playback(clip, start_position, midi_key)
     if playbin is None:
         print("  ERROR: Failed to create playbin!")
         return
