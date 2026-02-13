@@ -2,6 +2,7 @@
 """
 Multi-video MIDI-triggered player for Raspberry Pi 4
 Uses pre-processed, optimized clip files for better performance
+With playback position tracking and restart_on_play support
 """
 
 import gi
@@ -11,9 +12,6 @@ from pathlib import Path
 import json
 from pprint import pprint
 import sys
-import termios
-import tty
-import threading
 import signal
 import mido
 import queue
@@ -26,7 +24,12 @@ from tools import note_to_midi
 # -------------------------------
 # Configuration
 # -------------------------------
-MAX_SIMULTANEOUS_VIDEOS = 6
+MAX_SIMULTANEOUS_VIDEOS = 4
+
+# -------------------------------
+# Playback Position Tracking
+# -------------------------------
+clip_playback_data = {}  # key: file_path (URI), value: {'position': seconds, 'start_time': unix_time}
 
 # -------------------------------
 # Load Clips Configuration
@@ -48,18 +51,17 @@ for c in clips_config:
     if c['midi_channel'] > 0:
         c['midi_channel'] = c['midi_channel'] - 1  # Convert to 0-based
     
+    # Set default restart_on_play if not present
+    if 'restart_on_play' not in c:
+        c['restart_on_play'] = False
+    
     pprint(c)
     print("\n")
 
-# Build lookup dictionaries
-keypress_map = {}
+# Build MIDI lookup dictionary
 midi_map = {}
 
 for clip in clips_config:
-    key = clip.get('debug_keypress')
-    if key:
-        keypress_map[key] = clip
-    
     midi_channel = clip.get('midi_channel', -1)
     midi_note = clip.get('midi_note', -1)
     
@@ -200,10 +202,10 @@ def update_layout():
         
         print(f"  Video {idx} '{video.clip['name']}' -> pos({x},{y}) size({w}x{h})")
 
-def start_clip_playback(clip):
+def start_clip_playback(clip, start_position=0):
     """
     Create playbin for a pre-processed clip.
-    Since clips are pre-extracted, no seeking needed - just play from start!
+    Optionally seeks to start_position if > 0.
     """
     playbin = Gst.ElementFactory.make("playbin", f"player_{id(clip)}")
     playbin.set_property("uri", clip['file_path'])
@@ -229,8 +231,23 @@ def start_clip_playback(clip):
     
     playbin.set_property("video-sink", videobin)
     
-    # No need to seek - processed clips start at 0!
-    # Just set to PLAYING
+    # Set to PAUSED first for seeking
+    playbin.set_state(Gst.State.PAUSED)
+    
+    # Wait for preroll if we need to seek
+    if start_position > 0:
+        ret = playbin.get_state(5 * Gst.SECOND)
+        if ret[0] == Gst.StateChangeReturn.SUCCESS or ret[0] == Gst.StateChangeReturn.ASYNC:
+            # Seek to the desired position
+            seek_ns = int(start_position * Gst.SECOND)
+            playbin.seek_simple(
+                Gst.Format.TIME,
+                Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                seek_ns
+            )
+            print(f"  Seeking to {start_position:.1f}s")
+    
+    # Now set to PLAYING
     playbin.set_state(Gst.State.PLAYING)
     
     return playbin
@@ -250,66 +267,74 @@ def add_video(clip, midi_key):
         print(f"  At capacity ({MAX_SIMULTANEOUS_VIDEOS}), removing oldest: {oldest_key}")
         remove_video(oldest_key)
     
-    # Create playbin - no seeking needed!
-    playbin = start_clip_playback(clip)
+    # Determine start position based on restart_on_play
+    file_path = clip['file_path']
+    restart_on_play = clip.get('restart_on_play', False)
+    
+    start_position = 0
+    if not restart_on_play and file_path in clip_playback_data:
+        start_position = clip_playback_data[file_path].get('position', 0)
+        print(f"  Resuming from {start_position:.1f}s (restart_on_play=False)")
+    else:
+        # Reset position if restart_on_play is True
+        if file_path in clip_playback_data:
+            clip_playback_data[file_path]['position'] = 0
+        print(f"  Starting from beginning (restart_on_play={restart_on_play})")
+    
+    # Initialize clip data if needed
+    if file_path not in clip_playback_data:
+        clip_playback_data[file_path] = {'position': 0}
+    
+    # Create playbin with optional seek
+    playbin = start_clip_playback(clip, start_position)
     if playbin is None:
-        print("  Failed to create playbin")
+        print("  ERROR: Failed to create playbin!")
         return
     
-    # Create intervideosrc
+    # Create intervideosrc in main pipeline to receive from playbin
     intervideosrc = Gst.ElementFactory.make("intervideosrc", f"src_{id(clip)}")
     intervideosrc.set_property("channel", f"channel_{id(clip)}")
-    
     main_pipeline.add(intervideosrc)
-    
-    # Get compositor pad
-    compositor_pad = compositor.request_pad_simple("sink_%u")
+    intervideosrc.sync_state_with_parent()
     
     # Link to compositor
     src_pad = intervideosrc.get_static_pad("src")
-    src_pad.link(compositor_pad)
+    sink_pad = compositor.get_request_pad("sink_%u")
+    src_pad.link(sink_pad)
     
-    intervideosrc.sync_state_with_parent()
-    
-    # Set up looping if needed
-    # For processed clips, end_sec is already adjusted (0-based)
+    # Setup looping if configured
     loop_timer_id = None
-    end_sec = clip.get('end_sec', -1)
-    
-    if end_sec >= 0:
-        end_ns = int(end_sec * Gst.SECOND)
+    loop_duration = clip.get('loop_duration_ms')
+    if loop_duration and loop_duration > 0:
+        def restart_clip():
+            print(f"  Looping clip '{clip['name']}'")
+            if midi_key in active_videos:
+                remove_video(midi_key)
+                add_video(clip, midi_key)
+            return False
         
-        def check_loop():
-            success_pos, pos = playbin.query_position(Gst.Format.TIME)
-            if success_pos and pos >= end_ns:
-                # Loop back to start (which is 0 for processed clips)
-                playbin.seek_simple(
-                    Gst.Format.TIME,
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                    0  # Start is always 0 for processed clips!
-                )
-            return True
-        
-        loop_timer_id = GLib.timeout_add(100, check_loop)
+        loop_timer_id = GLib.timeout_add(loop_duration, restart_clip)
+        print(f"  Loop timer set for {loop_duration}ms")
     
-    # Create ActiveVideo
-    active_video = ActiveVideo(
+    # Store active video and record start time
+    active_videos[midi_key] = ActiveVideo(
         clip=clip,
         pipeline=playbin,
-        compositor_pad=compositor_pad,
+        compositor_pad=sink_pad,
         loop_timer_id=loop_timer_id,
         midi_key=midi_key,
         start_time=time.time()
     )
     
-    active_videos[midi_key] = active_video
+    # Record start time for position tracking
+    clip_playback_data[file_path]['start_time'] = time.time()
     
     print(f"  Added video. Total active: {len(active_videos)}")
     update_layout()
     print("=== add_video complete ===\n")
 
 def remove_video(midi_key):
-    """Remove a video from the compositor"""
+    """Remove a video from the compositor and update playback position"""
     global active_videos
     
     if midi_key not in active_videos:
@@ -319,6 +344,13 @@ def remove_video(midi_key):
     print(f"\n=== remove_video: key={midi_key} ===")
     
     video = active_videos[midi_key]
+    
+    # Calculate elapsed time and update position
+    file_path = video.clip['file_path']
+    if file_path in clip_playback_data and 'start_time' in clip_playback_data[file_path]:
+        elapsed = time.time() - clip_playback_data[file_path]['start_time']
+        clip_playback_data[file_path]['position'] = clip_playback_data[file_path].get('position', 0) + elapsed
+        print(f"  Updated position to {clip_playback_data[file_path]['position']:.1f}s")
     
     if video.loop_timer_id is not None:
         GLib.source_remove(video.loop_timer_id)
@@ -451,6 +483,9 @@ def process_midi_messages():
     
     return True
 
+# Need to import threading for MIDI reader
+import threading
+
 if PORT_NAME:
     reader_thread = threading.Thread(
         target=midi_reader,
@@ -466,19 +501,8 @@ else:
 print("=== MIDI Setup Complete ===\n")
 
 # -------------------------------
-# Keyboard Input Handler
+# Shutdown Handler
 # -------------------------------
-def getch():
-    """Get a single character from stdin without waiting for Enter"""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(sys.stdin.fileno())
-        ch = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
-
 running = True
 
 def shutdown():
@@ -495,41 +519,6 @@ def shutdown():
     if loop and loop.is_running():
         loop.quit()
 
-def keyboard_thread():
-    """Thread to handle keyboard input for debugging"""
-    global running
-    print("\n=== Keyboard control active ===")
-    print("Press keys to trigger clips (see clips.json for debug_keypress mappings)")
-    print("Available keys:", ", ".join(sorted(keypress_map.keys())))
-    print("Press 'q' to quit or Ctrl+C\n")
-    
-    while running:
-        try:
-            key = getch()
-            
-            if ord(key) == 3:  # Ctrl+C
-                print("\n^C detected")
-                GLib.idle_add(shutdown)
-                break
-            
-            if key == 'q':
-                print("\nQuitting...")
-                GLib.idle_add(shutdown)
-                break
-            
-            if key in keypress_map:
-                clip = keypress_map[key]
-                print(f"\nKey '{key}' pressed → triggering clip '{clip['name']}'")
-                midi_key = ('keyboard', ord(key))
-                GLib.idle_add(add_video, clip, midi_key)
-            elif key.isprintable():
-                print(f"\nKey '{key}' pressed (no clip mapped)")
-                
-        except Exception as e:
-            print(f"Error in keyboard thread: {e}")
-            running = False
-            break
-
 def signal_handler(sig, frame):
     """Handle SIGINT (Ctrl+C) from terminal"""
     print("\n^C signal received")
@@ -539,14 +528,12 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-kbd_thread = threading.Thread(target=keyboard_thread, daemon=True)
-kbd_thread.start()
-
 # -------------------------------
 # Start GLib Main Loop
 # -------------------------------
 print("=== Starting main loop ===")
-print("System ready! Using pre-processed optimized clips...\n")
+print("System ready! Using pre-processed optimized clips with resume support...\n")
+print("Press Ctrl+C to quit\n")
 
 loop = GLib.MainLoop()
 
