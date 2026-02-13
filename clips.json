@@ -131,6 +131,43 @@
   "midi_note":"D0",
   "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
   "comments":"source may be wrong"
+  },
+  {
+    "name":"flag",
+    "file_path":"./videos/1946 - One World or None.mp4",
+    "start_sec":240.5,
+    "end_sec":269.5,
+    "midi_channel":4,
+    "midi_note":"E0",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"source may be wrong"
+  },
+  {"name":"cross_field",
+    "file_path":"./videos/1946 - One World or None.mp4",
+    "start_sec":308.0,
+    "end_sec":331.0,
+    "midi_channel":4,
+    "midi_note":"F0",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"source may be wrong"
+},
+  {"name":"world_ranges",
+    "file_path":"./videos/1946 - One World or None.mp4",
+    "start_sec":351.0,
+    "end_sec":372.0,
+    "midi_channel":4,
+    "midi_note":"G0",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"source may be wrong"
+  },
+  {"name":"international_trial",
+"file_path":"./videos/1946 - One World or None.mp4",
+    "start_sec":496.0,
+    "end_sec":522.0,
+    "midi_channel":4,
+    "midi_note":"A0",
+    "source":"https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
+    "comments":"source may be wrong"
   }
   ]
 }
