@@ -20,6 +20,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 from tools import note_to_midi
+import threading 
 
 # -------------------------------
 # Configuration

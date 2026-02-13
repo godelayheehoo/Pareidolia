@@ -58,7 +58,7 @@
       "original_file": "videos/Eliza%20On%20Ice%20%281944%2C%20Mighty%20Mouse%2C%20Simon%20LeGree%29.mp4",
       "original_start": 145.0,
       "original_end": 148.0,
-      "restart_on_play": false
+      "restart_on_play": true
     },
     {
       "name": "child_singing",
@@ -194,14 +194,14 @@
       "file_path": "processed_clips/flag_e3da9f41.mp4",
       "start_sec": 0,
       "end_sec": 29.0,
-      "midi_channel": 4,
-      "midi_note": "E0",
+      "midi_channel": -1,
+      "midi_note": "B5",
       "source": "https://archive.org/compress/1946publicdomainanimation/formats=MPEG4&file=/1946publicdomainanimation.zip",
       "comments": "source may be wrong",
       "original_file": "videos/1946 - One World or None.mp4",
       "original_start": 240.5,
       "original_end": 269.5,
-      "restart_on_play": false
+      "restart_on_play": true
     },
     {
       "name": "cross_field",
