@@ -46,9 +46,28 @@ for c in clips_config:
     
     c['file_path'] = str(Path(c['file_path']).resolve().as_uri())
     
-    # Convert MIDI note if string
-    if isinstance(c['midi_note'], str):
-        c['midi_note'] = note_to_midi(c['midi_note'])
+    # Convert MIDI notes - now supports comma-separated chords
+    midi_notes = []
+    if isinstance(c['midi_note'], str) and c['midi_note']:
+        # Parse comma-separated notes
+        note_strings = [n.strip() for n in c['midi_note'].split(',') if n.strip()]
+        for note_str in note_strings:
+            try:
+                # Try to parse as note name first (e.g., "C4")
+                if note_str[0].isalpha():
+                    midi_notes.append(note_to_midi(note_str))
+                else:
+                    # Already a MIDI number
+                    midi_notes.append(int(note_str))
+            except (ValueError, IndexError, KeyError):
+                print(f"Warning: Could not parse note '{note_str}' in clip '{c['name']}'")
+    elif isinstance(c['midi_note'], int) and c['midi_note'] >= 0:
+        # Single MIDI number (old format)
+        midi_notes.append(c['midi_note'])
+    
+    # Store as sorted set (order doesn't matter for chord matching)
+    c['required_notes'] = frozenset(midi_notes) if midi_notes else frozenset()
+    
     if c['midi_channel'] > 0:
         c['midi_channel'] = c['midi_channel'] - 1  # Convert to 0-based
     
@@ -59,28 +78,22 @@ for c in clips_config:
     pprint(c)
     print("\n")
 
-# Build MIDI lookup dictionary
-midi_map = {}
+# Build list of all clips for chord matching
+# We no longer use a simple lookup dict since we need to check all clips
+# against the currently active notes
+all_clips = clips_config
 
-for clip in clips_config:
-    midi_channel = clip.get('midi_channel', -1)
-    midi_note = clip.get('midi_note', -1)
-    
-    if midi_channel >= 0 and midi_note >= 0:
-        midi_map[(midi_channel, midi_note)] = clip
-    elif midi_channel == -1 and midi_note >= 0:
-        if 'any_channel' not in midi_map:
-            midi_map['any_channel'] = {}
-        midi_map['any_channel'][midi_note] = clip
-    elif midi_channel >= 0 and midi_note == -1:
-        if 'any_note' not in midi_map:
-            midi_map['any_note'] = {}
-        midi_map['any_note'][midi_channel] = clip
-    elif midi_channel == -1 and midi_note == -1:
-        midi_map['any_any'] = clip
+# Track currently active notes per MIDI channel
+# Structure: { channel: set(note1, note2, ...) }
+active_notes_by_channel = {}
 
-print("\nMIDI mapping created:")
-print(f"  Specific mappings: {len([k for k in midi_map.keys() if isinstance(k, tuple)])}")
+print("\nClip chord requirements:")
+for clip in all_clips:
+    channel = clip.get('midi_channel', -1)
+    notes = clip.get('required_notes', frozenset())
+    ch_str = f"ch={channel}" if channel >= 0 else "any channel"
+    notes_str = f"{{{', '.join(map(str, sorted(notes)))}}}" if notes else "{empty}"
+    print(f"  '{clip['name']}': {ch_str}, notes={notes_str}")
 
 # -------------------------------
 # Initialize GStreamer
@@ -483,17 +496,91 @@ def midi_reader(port_name):
     except Exception as e:
         print(f"MIDI reader error: {e}")
 
-def find_clip_for_midi(channel, note):
-    """Find the appropriate clip for a MIDI channel/note combination"""
-    if (channel, note) in midi_map:
-        return midi_map[(channel, note)]
-    if 'any_channel' in midi_map and note in midi_map['any_channel']:
-        return midi_map['any_channel'][note]
-    if 'any_note' in midi_map and channel in midi_map['any_note']:
-        return midi_map['any_note'][channel]
-    if 'any_any' in midi_map:
-        return midi_map['any_any']
-    return None
+def is_chord_active(clip, channel, active_notes):
+    """
+    Check if a clip's required chord is currently active.
+    
+    Args:
+        clip: Clip configuration dict with 'required_notes' and 'midi_channel'
+        channel: The MIDI channel to check (or -1 for any)
+        active_notes: Set of currently active MIDI notes on that channel
+    
+    Returns:
+        True if the clip's chord is satisfied, False otherwise
+    """
+    required = clip.get('required_notes', frozenset())
+    clip_channel = clip.get('midi_channel', -1)
+    
+    # Empty required notes means this clip shouldn't trigger
+    if not required:
+        return False
+    
+    # Check if channel matches
+    if clip_channel >= 0 and clip_channel != channel:
+        return False
+    
+    # Check if all required notes are in the active notes
+    return required.issubset(active_notes)
+
+def find_active_clips(channel, active_notes):
+    """
+    Find all clips whose chords are satisfied by the currently active notes.
+    
+    Args:
+        channel: MIDI channel number
+        active_notes: Set of active MIDI note numbers on that channel
+    
+    Returns:
+        List of (clip, unique_key) tuples for clips that should be playing
+    """
+    active_clips = []
+    
+    for clip in all_clips:
+        clip_channel = clip.get('midi_channel', -1)
+        
+        # If clip wants a specific channel, check only that channel
+        if clip_channel >= 0:
+            if clip_channel == channel and is_chord_active(clip, channel, active_notes):
+                clip_key = (clip['file_path'], channel)
+                active_clips.append((clip, clip_key))
+        
+        # If clip accepts any channel (-1), check this channel
+        elif clip_channel == -1:
+            if is_chord_active(clip, channel, active_notes):
+                # Use the actual channel in the key to distinguish instances
+                clip_key = (clip['file_path'], channel)
+                active_clips.append((clip, clip_key))
+    
+    return active_clips
+
+def update_videos_for_channel(channel):
+    """
+    Update which videos are playing based on the current active notes for a channel.
+    This is called whenever notes change on a channel.
+    """
+    active_notes = active_notes_by_channel.get(channel, set())
+    
+    print(f"\n=== Updating videos for channel {channel} ===")
+    print(f"  Active notes: {sorted(active_notes) if active_notes else '(none)'}")
+    
+    # Find which clips should be playing now
+    should_be_active = find_active_clips(channel, active_notes)
+    should_be_active_keys = {clip_key for _, clip_key in should_be_active}
+    
+    # Get currently active video keys for this channel
+    current_keys = {key for key in active_videos.keys() if key[1] == channel}
+    
+    # Stop videos that should no longer be playing
+    for key in current_keys:
+        if key not in should_be_active_keys:
+            print(f"  Stopping: {active_videos[key].clip['name']}")
+            remove_video(key)
+    
+    # Start videos that should be playing but aren't
+    for clip, clip_key in should_be_active:
+        if clip_key not in active_videos:
+            print(f"  Starting: {clip['name']}")
+            add_video(clip, clip_key)
 
 def process_midi_messages():
     """Process MIDI messages from the queue"""
@@ -507,23 +594,27 @@ def process_midi_messages():
             if msg.type == 'note_on' and msg.velocity > 0:
                 print(f"\nMIDI NOTE_ON: ch={msg.channel} note={msg.note} vel={msg.velocity}")
                 
-                clip = find_clip_for_midi(msg.channel, msg.note)
-                if clip:
-                    print(f"  → Triggering clip '{clip['name']}'")
-                    midi_key = (msg.channel, msg.note)
-                    add_video(clip, midi_key)
-                else:
-                    print(f"  → No clip mapped to ch={msg.channel} note={msg.note}")
+                # Add note to active set for this channel
+                if msg.channel not in active_notes_by_channel:
+                    active_notes_by_channel[msg.channel] = set()
+                active_notes_by_channel[msg.channel].add(msg.note)
+                
+                # Update videos based on new chord state
+                update_videos_for_channel(msg.channel)
             
             elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
                 print(f"\nMIDI NOTE_OFF: ch={msg.channel} note={msg.note}")
-                midi_key = (msg.channel, msg.note)
                 
-                if midi_key in active_videos:
-                    print(f"  → Stopping video for ch={msg.channel} note={msg.note}")
-                    remove_video(midi_key)
-                else:
-                    print(f"  → No active video for ch={msg.channel} note={msg.note}")
+                # Remove note from active set for this channel
+                if msg.channel in active_notes_by_channel:
+                    active_notes_by_channel[msg.channel].discard(msg.note)
+                    
+                    # Clean up empty sets
+                    if not active_notes_by_channel[msg.channel]:
+                        del active_notes_by_channel[msg.channel]
+                
+                # Update videos based on new chord state
+                update_videos_for_channel(msg.channel)
                     
     except Exception as e:
         print(f"Error processing MIDI: {e}")
