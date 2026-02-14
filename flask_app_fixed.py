@@ -209,47 +209,44 @@ def index():
             
             # Get form values
             channel = request.form.get(f"channel_{i}")
-            note = request.form.get(f"note_{i}")
+            
+            # Collect up to 4 notes
+            notes = []
+            for note_idx in range(4):
+                note = request.form.get(f"note_{i}_{note_idx}")
+                if note and note != "None":
+                    notes.append(note)
+            
+            # Store as comma-separated string (for backward compatibility)
+            # or as array if you prefer to change the JSON structure
+            notes_str = ",".join(notes) if notes else ""
+            
             desc = request.form.get(f"desc_{i}")
-            restart_on_play = request.form.get(f"restart_{i}") == "on"
+            restart = request.form.get(f"restart_{i}") == "on"
             
-            # Start with original clip data to preserve all fields
-            new_clip = original_clip.copy()
-            
-            # Update only the fields from the form
-            if channel is not None:
-                new_clip["midi_channel"] = int(channel)
-            if note:
-                new_clip["midi_note"] = note
-            if desc:
-                new_clip["comments"] = desc
-            
-            # Update restart_on_play
-            new_clip["restart_on_play"] = restart_on_play
-            
-            new_clips.append(new_clip)
+            # Update clip with new values
+            original_clip.update({
+                "midi_channel": int(channel),
+                "midi_note": notes_str,  # Store all notes
+                "comments": desc,
+                "restart_on_play": restart
+            })
+            new_clips.append(original_clip)
         
         save_clips(new_clips)
-        
-        # Only restart if we actually saved clips
-        if new_clips:
-            print(f"✓ Saved {len(new_clips)} clips")
-            restart_video_process()
-        else:
-            print("⚠ No clips to save - keeping video process running")
-        
+        restart_video_process()
         return redirect("/")
 
-    # generate thumbnails for all clips
+    # Generate thumbnails
     for clip in clips:
         clip["thumbnail"] = generate_thumbnail(clip)
 
-    # Get MIDI channel colors for visual coding
+    # Channel colors
     channel_colors = {
-        1: '#FF6B6B', 2: '#4ECDC4', 3: '#45B7D1', 4: '#FFA07A',
-        5: '#98D8C8', 6: '#F7DC6F', 7: '#BB8FCE', 8: '#85C1E2',
-        9: '#F8B739', 10: '#52B788', 11: '#E07A5F', 12: '#81B29A',
-        13: '#F4A261', 14: '#E76F51', 15: '#8AB17D', 16: '#C77DFF',
+        1: '#e74c3c', 2: '#3498db', 3: '#2ecc71', 4: '#f39c12',
+        5: '#9b59b6', 6: '#1abc9c', 7: '#e67e22', 8: '#34495e',
+        9: '#c0392b', 10: '#2980b9', 11: '#27ae60', 12: '#f1c40f',
+        13: '#8e44ad', 14: '#16a085', 15: '#d35400', 16: '#7f8c8d',
         -1: '#95a5a6'
     }
 
@@ -257,46 +254,44 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Video Clip Mapper</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>Clip Mapper</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
             * {
-                box-sizing: border-box;
-                -webkit-tap-highlight-color: transparent;
-            }
-            
-            body { 
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
                 margin: 0;
                 padding: 0;
+                box-sizing: border-box;
+            }
+            
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 min-height: 100vh;
+                padding-bottom: 100px;
             }
             
             .header {
                 background: rgba(255, 255, 255, 0.95);
-                padding: 15px 20px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                backdrop-filter: blur(10px);
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
                 position: sticky;
                 top: 0;
                 z-index: 100;
             }
             
             .header-content {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                max-width: 800px;
+                max-width: 1200px;
                 margin: 0 auto;
+                padding: 20px;
             }
             
-            .header h1 {
-                margin: 0;
-                font-size: 20px;
+            h1 {
                 color: #2c3e50;
+                font-size: 28px;
+                font-weight: 700;
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 12px;
             }
             
             .status-indicator {
@@ -322,173 +317,285 @@ def index():
             }
             
             .container {
-                max-width: 800px;
+                max-width: 1200px;
                 margin: 0 auto;
+                padding: 30px 20px;
+            }
+            
+            .scale-selector {
+                background: white;
+                border-radius: 12px;
+                padding: 24px;
+                margin-bottom: 30px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            }
+            
+            .scale-selector h2 {
+                color: #2c3e50;
+                font-size: 20px;
+                margin-bottom: 16px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            
+            .scale-controls {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+            }
+            
+            .scale-control-group {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .scale-control-group label {
+                font-weight: 600;
+                color: #34495e;
+                font-size: 14px;
+            }
+            
+            .scale-control-group select {
+                padding: 12px;
+                border: 2px solid #ecf0f1;
+                border-radius: 8px;
+                font-size: 16px;
+                background: white;
+                transition: all 0.3s;
+            }
+            
+            .scale-control-group select:focus {
+                outline: none;
+                border-color: #667eea;
+                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            }
+            
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 16px;
+                margin-bottom: 30px;
+            }
+            
+            .stat-item {
+                background: white;
+                border-radius: 12px;
                 padding: 20px;
+                text-align: center;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            }
+            
+            .stat-value {
+                font-size: 32px;
+                font-weight: 700;
+                color: #667eea;
+            }
+            
+            .stat-label {
+                font-size: 14px;
+                color: #7f8c8d;
+                margin-top: 4px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
             }
             
             .clip-card {
                 background: white;
                 border-radius: 12px;
-                margin-bottom: 15px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                margin-bottom: 20px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
                 overflow: hidden;
-                transition: transform 0.2s, box-shadow 0.2s;
+                display: grid;
+                grid-template-columns: 200px 1fr;
+                transition: transform 0.3s, box-shadow 0.3s;
             }
             
-            .clip-card:active {
-                transform: scale(0.98);
+            .clip-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
             }
             
             .clip-thumbnail {
-                width: 100%;
-                height: 180px;
+                width: 200px;
+                height: 200px;
                 object-fit: cover;
-                background: #f0f0f0;
             }
             
             .clip-info {
-                padding: 15px;
+                padding: 20px;
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
             }
             
             .clip-name {
-                font-size: 18px;
-                font-weight: 600;
+                font-size: 20px;
                 color: #2c3e50;
-                margin: 0 0 10px 0;
+                font-weight: 600;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            
+            .channel-badge {
+                font-size: 12px;
+                padding: 4px 12px;
+                border-radius: 20px;
+                color: white;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
             }
             
             .clip-controls {
                 display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 10px;
-                margin-bottom: 10px;
+                grid-template-columns: 150px 1fr;
+                gap: 16px;
             }
             
             .control-group {
                 display: flex;
                 flex-direction: column;
+                gap: 6px;
             }
             
             .control-label {
                 font-size: 12px;
+                font-weight: 600;
                 color: #7f8c8d;
-                margin-bottom: 5px;
-                font-weight: 500;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+            
+            .notes-grid {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 8px;
             }
             
             select, input[type="text"] {
                 padding: 10px;
                 border: 2px solid #ecf0f1;
                 border-radius: 8px;
-                font-size: 16px;
+                font-size: 15px;
+                transition: all 0.3s;
                 background: white;
-                transition: border-color 0.2s;
             }
             
             select:focus, input[type="text"]:focus {
                 outline: none;
                 border-color: #667eea;
-            }
-            
-            .channel-badge {
-                display: inline-block;
-                padding: 4px 8px;
-                border-radius: 6px;
-                font-size: 12px;
-                font-weight: 600;
-                color: white;
-                margin-left: 5px;
+                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
             }
             
             .description-input {
                 width: 100%;
-                margin-top: 10px;
             }
             
             .checkbox-group {
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                margin-top: 10px;
-                padding: 10px;
+                padding: 12px;
                 background: #f8f9fa;
                 border-radius: 8px;
             }
             
             .checkbox-group input[type="checkbox"] {
-                width: 22px;
-                height: 22px;
+                width: 20px;
+                height: 20px;
                 cursor: pointer;
             }
             
             .checkbox-group label {
+                cursor: pointer;
                 font-size: 14px;
                 color: #2c3e50;
-                cursor: pointer;
                 user-select: none;
             }
             
             .action-buttons {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: white;
+                padding: 20px;
+                box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
                 display: flex;
-                gap: 10px;
-                margin-top: 20px;
-                position: sticky;
-                bottom: 20px;
+                gap: 12px;
+                justify-content: center;
+                z-index: 99;
             }
             
             button {
-                flex: 1;
-                padding: 16px;
+                padding: 14px 32px;
                 border: none;
-                border-radius: 12px;
+                border-radius: 8px;
                 font-size: 16px;
                 font-weight: 600;
                 cursor: pointer;
-                transition: all 0.2s;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            }
-            
-            button:active {
-                transform: translateY(2px);
-                box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+                transition: all 0.3s;
+                display: flex;
+                align-items: center;
+                gap: 8px;
             }
             
             .btn-save {
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
+                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            }
+            
+            .btn-save:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
             }
             
             .btn-shutdown {
-                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                background: #e74c3c;
                 color: white;
+                box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
             }
             
-            .stats {
-                background: rgba(255, 255, 255, 0.95);
-                padding: 15px;
-                border-radius: 12px;
-                margin-bottom: 20px;
-                display: flex;
-                justify-content: space-around;
-                text-align: center;
+            .btn-shutdown:hover {
+                background: #c0392b;
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(231, 76, 60, 0.5);
             }
             
-            .stat-item {
-                flex: 1;
-            }
-            
-            .stat-value {
-                font-size: 24px;
-                font-weight: 700;
-                color: #667eea;
-            }
-            
-            .stat-label {
-                font-size: 12px;
-                color: #7f8c8d;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
+            @media (max-width: 768px) {
+                .clip-card {
+                    grid-template-columns: 1fr;
+                }
+                
+                .clip-thumbnail {
+                    width: 100%;
+                    height: 200px;
+                }
+                
+                .clip-controls {
+                    grid-template-columns: 1fr;
+                }
+                
+                .notes-grid {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+                
+                .scale-controls {
+                    grid-template-columns: 1fr;
+                }
+                
+                .action-buttons {
+                    flex-direction: column;
+                }
+                
+                button {
+                    width: 100%;
+                    justify-content: center;
+                }
             }
             
             @media (prefers-color-scheme: dark) {
@@ -496,27 +603,22 @@ def index():
                     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                 }
                 
-                .header {
-                    background: rgba(26, 26, 46, 0.95);
+                .header, .stat-item, .clip-card, .action-buttons, .scale-selector {
+                    background: #0f3460;
                 }
                 
-                .header h1 {
+                h1, .clip-name, .scale-selector h2 {
                     color: #ecf0f1;
                 }
                 
-                .clip-card, .stats {
-                    background: #1a1a2e;
-                    color: #ecf0f1;
-                }
-                
-                .clip-name {
-                    color: #ecf0f1;
+                .stat-label, .control-label, .scale-control-group label {
+                    color: #bdc3c7;
                 }
                 
                 select, input[type="text"] {
                     background: #16213e;
+                    border-color: #34495e;
                     color: #ecf0f1;
-                    border-color: #2c3e50;
                 }
                 
                 .checkbox-group {
@@ -540,6 +642,47 @@ def index():
         </div>
         
         <div class="container">
+            <div class="scale-selector">
+                <h2>🎼 Scale & Key Settings</h2>
+                <div class="scale-controls">
+                    <div class="scale-control-group">
+                        <label for="keySelect">Root Note</label>
+                        <select id="keySelect" onchange="updateAvailableNotes()">
+                            <option value="C">C</option>
+                            <option value="C#">C# / Db</option>
+                            <option value="D">D</option>
+                            <option value="D#">D# / Eb</option>
+                            <option value="E">E</option>
+                            <option value="F">F</option>
+                            <option value="F#">F# / Gb</option>
+                            <option value="G">G</option>
+                            <option value="G#">G# / Ab</option>
+                            <option value="A">A</option>
+                            <option value="A#">A# / Bb</option>
+                            <option value="B">B</option>
+                        </select>
+                    </div>
+                    <div class="scale-control-group">
+                        <label for="scaleSelect">Scale Type</label>
+                        <select id="scaleSelect" onchange="updateAvailableNotes()">
+                            <option value="chromatic">Chromatic (All Notes)</option>
+                            <option value="major">Major</option>
+                            <option value="minor">Natural Minor</option>
+                            <option value="harmonic_minor">Harmonic Minor</option>
+                            <option value="melodic_minor">Melodic Minor</option>
+                            <option value="dorian">Dorian</option>
+                            <option value="phrygian">Phrygian</option>
+                            <option value="lydian">Lydian</option>
+                            <option value="mixolydian">Mixolydian</option>
+                            <option value="pentatonic_major">Pentatonic Major</option>
+                            <option value="pentatonic_minor">Pentatonic Minor</option>
+                            <option value="blues">Blues Scale</option>
+                            <option value="whole_tone">Whole Tone</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
             <div class="stats">
                 <div class="stat-item">
                     <div class="stat-value">{{ clips|length }}</div>
@@ -579,11 +722,15 @@ def index():
                             </div>
                             
                             <div class="control-group">
-                                <label class="control-label">MIDI Note</label>
-                                <input type="text" 
-                                       name="note_{{i}}" 
-                                       value="{{clip.get('midi_note','')}}"
-                                       placeholder="e.g. C4 or 60">
+                                <label class="control-label">MIDI Notes (up to 4)</label>
+                                <div class="notes-grid">
+                                    {% set current_notes = clip.get('midi_note', '').split(',') if clip.get('midi_note') else [] %}
+                                    {% for note_idx in range(4) %}
+                                    <select name="note_{{i}}_{{note_idx}}" class="note-select">
+                                        <option value="None">None</option>
+                                    </select>
+                                    {% endfor %}
+                                </div>
                             </div>
                         </div>
                         
@@ -605,6 +752,7 @@ def index():
                         </div>
                         
                         <input type="hidden" name="name_{{i}}" value="{{clip['name']}}">
+                        <input type="hidden" class="current-notes" value="{{clip.get('midi_note', '')}}">
                     </div>
                 </div>
                 {% endfor %}
@@ -619,6 +767,100 @@ def index():
         </div>
         
         <script>
+            // Music theory: scale intervals (semitones from root)
+            const scaleIntervals = {
+                chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                major: [0, 2, 4, 5, 7, 9, 11],
+                minor: [0, 2, 3, 5, 7, 8, 10],
+                harmonic_minor: [0, 2, 3, 5, 7, 8, 11],
+                melodic_minor: [0, 2, 3, 5, 7, 9, 11],
+                dorian: [0, 2, 3, 5, 7, 9, 10],
+                phrygian: [0, 1, 3, 5, 7, 8, 10],
+                lydian: [0, 2, 4, 6, 7, 9, 11],
+                mixolydian: [0, 2, 4, 5, 7, 9, 10],
+                pentatonic_major: [0, 2, 4, 7, 9],
+                pentatonic_minor: [0, 3, 5, 7, 10],
+                blues: [0, 3, 5, 6, 7, 10],
+                whole_tone: [0, 2, 4, 6, 8, 10]
+            };
+            
+            // All chromatic notes
+            const chromaticNotes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            
+            // All MIDI note names from C0 to B8
+            function getAllMidiNotes() {
+                const notes = [];
+                for (let octave = 0; octave <= 8; octave++) {
+                    for (let note of chromaticNotes) {
+                        notes.push(note + octave);
+                    }
+                }
+                return notes;
+            }
+            
+            // Get notes in a specific scale
+            function getScaleNotes(root, scaleType) {
+                const rootIndex = chromaticNotes.indexOf(root);
+                const intervals = scaleIntervals[scaleType];
+                const scaleNotes = [];
+                
+                for (let octave = 0; octave <= 8; octave++) {
+                    for (let interval of intervals) {
+                        const noteIndex = (rootIndex + interval) % 12;
+                        scaleNotes.push(chromaticNotes[noteIndex] + octave);
+                    }
+                }
+                
+                return scaleNotes;
+            }
+            
+            // Update all note dropdowns based on selected scale
+            function updateAvailableNotes() {
+                const root = document.getElementById('keySelect').value;
+                const scaleType = document.getElementById('scaleSelect').value;
+                const availableNotes = getScaleNotes(root, scaleType);
+                
+                // Update all note select dropdowns
+                const noteSelects = document.querySelectorAll('.note-select');
+                noteSelects.forEach(select => {
+                    const currentValue = select.value;
+                    
+                    // Clear existing options except None
+                    select.innerHTML = '<option value="None">None</option>';
+                    
+                    // Add available notes
+                    availableNotes.forEach(note => {
+                        const option = document.createElement('option');
+                        option.value = note;
+                        option.textContent = note;
+                        select.appendChild(option);
+                    });
+                    
+                    // Restore previous selection if still valid
+                    if (availableNotes.includes(currentValue) || currentValue === 'None') {
+                        select.value = currentValue;
+                    }
+                });
+            }
+            
+            // Initialize note dropdowns with saved values
+            function initializeNoteSelects() {
+                const clipCards = document.querySelectorAll('.clip-card');
+                clipCards.forEach(card => {
+                    const currentNotesInput = card.querySelector('.current-notes');
+                    const noteSelects = card.querySelectorAll('.note-select');
+                    
+                    if (currentNotesInput) {
+                        const savedNotes = currentNotesInput.value.split(',').filter(n => n.trim());
+                        savedNotes.forEach((note, idx) => {
+                            if (idx < noteSelects.length && note.trim()) {
+                                noteSelects[idx].value = note.trim();
+                            }
+                        });
+                    }
+                });
+            }
+            
             // Check video process status
             function updateStatus() {
                 fetch('/api/status')
@@ -684,6 +926,10 @@ def index():
                     buttons.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
                 }
             });
+            
+            // Initialize on page load
+            updateAvailableNotes();
+            initializeNoteSelects();
         </script>
     </body>
     </html>
